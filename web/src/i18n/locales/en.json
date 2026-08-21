@@ -240,21 +240,18 @@
     "perSec": "/s"
   },
   "script": {
-    "title": "Test script",
-    "mode": "Script source",
-    "builtin": "Built from this form",
-    "inline": "Custom script (stored in profile)",
-    "path": "Custom script (file on this host)",
-    "import": "Import file…",
-    "loadExample": "Load example",
+    "title": "Import / Export",
+    "import": "Import script…",
+    "export": "Export as script",
+    "imported": "Imported {{file}} as {{protocol}} — the form below is filled in",
+    "importFailed": "Import failed",
+    "warnings": "{{count}} item(s) the form cannot represent:",
+    "tooBig": "File is too large (limit 1 MB)",
+    "useExternal": "Run an existing script file instead of the generated one",
     "filePath": "Absolute path to script",
-    "content": "Script",
-    "builtinHint": "The form above generates the script.",
-    "inlineHint": "Self-contained scripts only — relative imports and data files resolve against a temp directory.",
-    "pathHint": "Executed where it lives, so relative imports, open() and CSV feeds keep working.",
-    "kafkaWarn": "This module is imported into the dashboard process and runs with full Node privileges.",
-    "restHint": "k6 script. Live metrics, checks and CSV keep working; __ENV.CFG and __ENV.SUMMARY_OUT are injected.",
-    "socketHint": "Artillery YAML. The live-stats plugin is merged in automatically.",
-    "tooBig": "File is too large (limit 1 MB)"
+    "pathHint": "Executed where it lives, so relative imports, open() and CSV feeds keep working. The form below is ignored.",
+    "hint_rest": "k6 JavaScript — parsed, not executed.",
+    "hint_socket": "Artillery YAML.",
+    "hint_kafka": "Kafka YAML config."
   }
 }

@@ -1,42 +1,69 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Protocol, ScriptConfig } from '@shared/types.ts';
+import type { Protocol, RunConfig, ScriptConfig } from '@shared/types.ts';
 import { api } from '../lib/api.ts';
-import { SelectField, TextField } from './Fields.tsx';
+import { CheckField, TextField } from './Fields.tsx';
 
 const MAX_BYTES = 1_000_000;
 
 const ACCEPT: Record<Protocol, string> = {
-  rest: '.js,.mjs,.ts',
-  socket: '.yml,.yaml',
-  kafka: '.mjs,.js',
+  rest: '.js,.mjs,.ts,.json',
+  socket: '.yml,.yaml,.json',
+  kafka: '.yml,.yaml,.json',
 };
 
+/**
+ * Import a script into the form, or export the form as a script.
+ *
+ * Import parses — it does not store the text and it never executes the file.
+ * Anything the form cannot represent is reported as a warning rather than
+ * dropped quietly, so the mapping is never silently lossy.
+ */
 export function ScriptEditor(props: {
   protocol: Protocol;
-  value: ScriptConfig;
-  onChange: (v: ScriptConfig) => void;
+  profileName: string;
+  config: RunConfig;
+  script: ScriptConfig;
+  onImported: (protocol: Protocol, config: RunConfig) => void;
+  onScriptChange: (v: ScriptConfig) => void;
   onError: (msg: string) => void;
 }) {
   const { t } = useTranslation();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
-  const v = props.value;
-  const set = (patch: Partial<ScriptConfig>): void => props.onChange({ ...v, ...patch });
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [note, setNote] = useState<string | null>(null);
 
   async function onFile(file: File): Promise<void> {
     if (file.size > MAX_BYTES) { props.onError(t('script.tooBig')); return; }
-    // Read in the browser: the file never needs to be uploaded anywhere, it is
-    // stored in the profile and written to a temp file at run time.
-    const content = await file.text();
-    set({ mode: 'inline', content, filename: file.name });
+    setBusy(true);
+    setWarnings([]);
+    setNote(null);
+    try {
+      const content = await file.text();
+      // Let the server sniff the protocol; fall back to the current one.
+      let res = await api.importScript({ content, filename: file.name, protocol: 'auto' })
+        .catch(() => api.importScript({ content, filename: file.name, protocol: props.protocol }));
+      setWarnings(res.warnings);
+      setNote(t('script.imported', { file: file.name, protocol: t(`protocol.${res.protocol}`) }));
+      props.onImported(res.protocol, res.config);
+    } catch (e) {
+      props.onError(`${t('script.importFailed')}: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function loadExample(): Promise<void> {
+  async function exportScript(): Promise<void> {
     setBusy(true);
     try {
-      const ex = await api.example(props.protocol);
-      set({ mode: 'inline', content: ex.content, filename: ex.filename });
+      const { blob, filename } = await api.exportScript(props.config, props.profileName);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
     } catch (e) {
       props.onError((e as Error).message);
     } finally {
@@ -44,85 +71,63 @@ export function ScriptEditor(props: {
     }
   }
 
-  const modeHint = v.mode === 'builtin' ? t('script.builtinHint')
-    : v.mode === 'inline' ? t('script.inlineHint')
-    : t('script.pathHint');
-
-  const protocolHint = props.protocol === 'rest' ? t('script.restHint')
-    : props.protocol === 'socket' ? t('script.socketHint')
-    : null;
+  const usingExternal = props.script.mode === 'path';
 
   return (
     <>
       <div className="section-title">{t('script.title')}</div>
 
-      <div className="field-row">
-        <SelectField
-          label={t('script.mode')}
-          value={v.mode}
-          hint={modeHint}
-          options={[
-            { value: 'builtin' as const, label: t('script.builtin') },
-            { value: 'inline' as const, label: t('script.inline') },
-            { value: 'path' as const, label: t('script.path') },
-          ]}
-          onChange={(mode) => set({ mode })}
-        />
+      <div className="inline" style={{ marginBottom: 8 }}>
+        <button className="btn btn-sm" disabled={busy} onClick={() => fileRef.current?.click()}>
+          ⇧ {t('script.import')}
+        </button>
+        <button className="btn btn-sm" disabled={busy} onClick={() => void exportScript()}>
+          ⇩ {t('script.export')}
+        </button>
+        <span className="field-hint">{t(`script.hint_${props.protocol}`)}</span>
       </div>
 
-      {v.mode === 'builtin' ? null : (
-        <>
-          {protocolHint ? <div className="field-hint" style={{ marginBottom: 8 }}>{protocolHint}</div> : null}
-          {props.protocol === 'kafka' ? (
-            <div className="script-warn">⚠ {t('script.kafkaWarn')}</div>
-          ) : null}
+      <input
+        ref={fileRef}
+        type="file"
+        accept={ACCEPT[props.protocol]}
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void onFile(f);
+          e.target.value = '';
+        }}
+      />
 
-          {v.mode === 'path' ? (
-            <TextField
-              label={t('script.filePath')}
-              value={v.path}
-              placeholder="/Users/me/loadtests/checkout.js"
-              onChange={(path) => set({ path })}
-            />
-          ) : (
-            <>
-              <div className="inline" style={{ marginBottom: 6 }}>
-                <button className="btn btn-sm" disabled={busy} onClick={() => fileRef.current?.click()}>
-                  ⇧ {t('script.import')}
-                </button>
-                <button className="btn btn-sm" disabled={busy} onClick={() => void loadExample()}>
-                  {t('script.loadExample')}
-                </button>
-                {v.filename ? <span className="badge badge-muted">{v.filename}</span> : null}
-                <span className="field-hint">
-                  {new Blob([v.content]).size.toLocaleString()} B
-                </span>
-              </div>
-              <input
-                ref={fileRef}
-                type="file"
-                accept={ACCEPT[props.protocol]}
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void onFile(f);
-                  // Reset so re-picking the same file fires change again.
-                  e.target.value = '';
-                }}
-              />
-              <label className="field">
-                <span className="field-label">{t('script.content')}</span>
-                <textarea
-                  className="script-area"
-                  spellCheck={false}
-                  value={v.content}
-                  onChange={(e) => set({ content: e.target.value })}
-                />
-              </label>
-            </>
-          )}
-        </>
-      )}
+      {note ? <div className="script-note">✓ {note}</div> : null}
+
+      {warnings.length ? (
+        <div className="script-warn">
+          <strong>{t('script.warnings', { count: warnings.length })}</strong>
+          <ul style={{ margin: '4px 0 0 16px' }}>
+            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>
+      ) : null}
+
+      <CheckField
+        label={t('script.useExternal')}
+        value={usingExternal}
+        onChange={(on) => props.onScriptChange({
+          ...props.script,
+          mode: on ? 'path' : 'builtin',
+          content: '',
+        })}
+      />
+      {usingExternal ? (
+        <TextField
+          label={t('script.filePath')}
+          hint={t('script.pathHint')}
+          value={props.script.path}
+          placeholder="/Users/me/loadtests/checkout.js"
+          onChange={(path) => props.onScriptChange({ ...props.script, path })}
+        />
+      ) : null}
     </>
   );
 }

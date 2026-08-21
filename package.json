@@ -20,6 +20,7 @@
   "dependencies": {
     "@fastify/cors": "^10.0.1",
     "@fastify/static": "^8.0.3",
+    "acorn": "^8.18.0",
     "fastify": "^5.2.0",
     "yaml": "^2.6.1",
     "zod": "^3.24.1"

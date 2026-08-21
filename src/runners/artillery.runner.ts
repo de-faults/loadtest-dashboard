@@ -204,10 +204,13 @@ function buildScript(cfg: SocketConfig, runId: string): Record<string, unknown> 
     } else if (step.kind === 'think') {
       flow.push({ think: Number(step.value) || 1 });
     } else if (step.kind === 'expect') {
-      // The ws engine matches on the response of the preceding send.
+      // The ws engine reads match specs from inside the send step, beside
+      // `payload`. Attaching a sibling key makes Artillery reject the scenario
+      // with "must have 1 key" before the run starts.
       const prev = flow[flow.length - 1];
-      if (prev && 'send' in prev) {
-        prev.response = { match: { regexp: escapeRegex(step.value) } };
+      const payload = prev && typeof prev.send === 'string' ? prev.send : undefined;
+      if (prev && payload !== undefined) {
+        prev.send = { payload, match: { regexp: escapeRegex(step.value) } };
       }
     }
   }

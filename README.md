@@ -94,46 +94,44 @@ real number.
   then count *consumed* messages. Optional consumer-lag sampling charts lag on the same
   x-axis as TPS, so lag spikes line up with load.
 
-## Bring your own script
+## Import and export scripts
 
-Every protocol can run a script you supply instead of the one the form builds.
-**Configuration → Test script** offers three sources:
+Every protocol round-trips between a script file and the UI form.
+**Configuration → Import / Export**:
 
-| Source | Behaviour |
-|---|---|
-| Built from this form | the UI-built configuration drives the run |
-| Custom script (stored in profile) | script text lives in the profile, written to a temp file per run |
-| Custom script (file on this host) | an absolute path, executed where it lives |
+- **Import script…** parses a file and fills in the form. The file is *never
+  executed* — JavaScript is read through an AST, YAML through a parser. The
+  protocol is detected from the file itself.
+- **Export as script** downloads the current form as a runnable script.
 
-Use **file on this host** for anything real: the script runs in its own directory,
-so relative imports, `open()` and CSV data feeds keep resolving. Stored-in-profile
-scripts must be self-contained — their temp directory is not your repo.
+| Protocol | Format | Notes |
+|---|---|---|
+| REST | k6 JavaScript | real k6 script; runs standalone under `k6 run` |
+| WebSocket | Artillery YAML | real Artillery script; runs standalone under `artillery run` |
+| Kafka | YAML config | Kafka has no standard script format, so the portable form is declarative — and carries no executable code |
 
-**Load example** drops a working starting point into the editor
-(`src/runners/examples/`), and **Import file…** reads a local file in the browser.
+Exports carry a small `dashboard` metadata block for the few things the tools
+have no equivalent for (per-check minimum pass rate, body type, auth kind).
+Delete it and the file still runs; those fields just fall back to defaults on
+the next import.
 
-- **REST** — a normal k6 script. Live charts, latency profile, checks and CSV keep
-  working, because the dashboard reads k6's own metric stream rather than anything
-  the built-in script does specially. `__ENV.CFG` (the profile as JSON) and
-  `__ENV.SUMMARY_OUT` are injected; keep `handleSummary` writing to `SUMMARY_OUT`
-  if you want k6's threshold verdicts reflected in the run. Your `options.thresholds`
-  are honoured by k6 and can fail the run on their own; the profile's thresholds are
-  evaluated on top of the collected metrics.
-- **WebSocket** — a normal Artillery YAML script. The `ltd-publish` output plugin is
-  merged into `config.plugins` at run time so live metrics keep streaming; plugins
-  you declare yourself are preserved. If the file is not parseable YAML it is run
-  untouched and the run log says live metrics are unavailable until it finishes.
-- **Kafka** — an ES module exporting `generate({ seq, ts, producer })` returning
-  `{ value, key?, headers? }`, plus an optional `setup()`. Objects are
-  JSON-stringified. The dashboard's `ltd-sent-at` / `ltd-seq` timing headers are
-  merged in last, so a generator cannot shadow them and break latency measurement.
-  A generator that throws fails that one message and is reported once, rather than
-  aborting the run.
+**Foreign scripts import too.** A k6 script written by hand — no metadata block —
+is read for its `options` (stages, scenarios, thresholds), its `http.*` call
+(URL, method, headers, timeout, redirects, body), its `sleep()`, and any check
+predicates the form can represent, including idioms like
+`r.status >= 200 && r.status < 300` (→ a `200-299` range check) and
+`r.timings.duration < 250`. k6 thresholds are mapped back to the DSL
+(`http_req_failed: rate<0.05` → `error_rate < 5`).
 
-> **Kafka scripts run in-process.** k6 and Artillery scripts execute inside their
-> own tool's runtime in a separate process. A Kafka generator is imported into the
-> dashboard's Node process and runs with full Node privileges — the UI warns before
-> you enable it. Only load code you would run yourself.
+Anything that cannot be represented is reported as a warning in the UI rather
+than dropped silently — a dynamic body such as `JSON.stringify(payload)`, or a
+predicate like `r.status % 7 === 0`.
+
+### Running an existing file untouched
+
+For a script with its own imports, `open()` calls or CSV data feeds, tick
+**Run an existing script file** and give an absolute path. It executes where it
+lives so relative paths keep resolving, and the form is ignored for that run.
 
 ## Thresholds
 

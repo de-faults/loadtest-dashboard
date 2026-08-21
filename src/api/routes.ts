@@ -11,9 +11,12 @@ import { activeRuns, availability, startRun, stopRun, targetOf } from '../runner
 import { ingestArtilleryReport } from '../runners/artillery.runner.ts';
 import { monitorStatus, startMonitor, stopMonitor } from '../kafka/monitor.ts';
 import { exampleScript } from '../runners/script.ts';
+import {
+  detectProtocol, exportScript, importScript, SCRIPT_FILENAME, SCRIPT_MIME,
+} from '../transfer/index.ts';
 import { profileSchema, runConfigSchema, settingsSchema } from './schema.ts';
 import { TOKEN } from '../config.ts';
-import type { Profile, Protocol, RunEvent } from '../shared/types.ts';
+import type { Profile, Protocol, RunConfig, RunEvent } from '../shared/types.ts';
 
 export function registerRoutes(app: FastifyInstance): void {
   // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -59,6 +62,56 @@ export function registerRoutes(app: FastifyInstance): void {
     const content = await exampleScript(protocol as Protocol);
     const filename = { rest: 'script.js', socket: 'script.yml', kafka: 'generator.mjs' }[protocol]!;
     return { filename, content };
+  });
+
+  // ─── Script import / export ───────────────────────────────────────────────
+
+  /**
+   * Parse a script into form configuration. The script is never executed —
+   * JS is read through an AST, YAML through a parser.
+   */
+  app.post('/api/import', async (req, reply) => {
+    const body = req.body as { content?: string; filename?: string; protocol?: string };
+    const content = typeof body?.content === 'string' ? body.content : '';
+    if (!content.trim()) return reply.code(400).send({ error: 'empty file' });
+    if (content.length > 1_000_000) return reply.code(413).send({ error: 'file too large (limit 1 MB)' });
+
+    const filename = typeof body.filename === 'string' ? body.filename : '';
+    const requested = body.protocol && body.protocol !== 'auto' ? body.protocol : null;
+    const protocol = (requested ?? detectProtocol(filename, content)) as Protocol | null;
+    if (!protocol || !['rest', 'socket', 'kafka'].includes(protocol)) {
+      return reply.code(422).send({
+        error: 'could not tell which runner this script belongs to — pick a protocol and import again',
+      });
+    }
+
+    try {
+      const result = importScript(protocol, content);
+      // Round-trip through the same validator a saved profile goes through, so
+      // the form can never be populated with something the runner would reject.
+      const parsed = runConfigSchema.safeParse(result.config);
+      if (!parsed.success) {
+        return reply.code(422).send({ error: parsed.error.issues, warnings: result.warnings });
+      }
+      return { protocol, config: result.config, warnings: result.warnings, detected: !requested };
+    } catch (err) {
+      return reply.code(422).send({ error: (err as Error).message });
+    }
+  });
+
+  /** Generate a script from configuration held in the form (may be unsaved). */
+  app.post('/api/export/script', async (req, reply) => {
+    const parsed = runConfigSchema.safeParse((req.body as { config?: unknown })?.config);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues });
+    const config = parsed.data as unknown as RunConfig;
+    const name = (req.body as { name?: string }).name;
+    return sendScript(reply, config, name);
+  });
+
+  app.get('/api/profiles/:id/export.script', async (req, reply) => {
+    const p = store.getProfile((req.params as { id: string }).id);
+    if (!p) return reply.code(404).send({ error: 'not found' });
+    return sendScript(reply, p.config, p.name);
   });
 
   // ─── Settings ─────────────────────────────────────────────────────────────
@@ -241,6 +294,16 @@ export function registerRoutes(app: FastifyInstance): void {
     req.raw.on('close', cleanup);
     req.raw.on('error', cleanup);
   });
+}
+
+function sendScript(reply: FastifyReply, config: RunConfig, name?: string): FastifyReply {
+  const body = exportScript(config);
+  const base = SCRIPT_FILENAME[config.protocol];
+  const filename = name ? `${slug(name)}-${base}` : base;
+  return reply
+    .header('Content-Type', SCRIPT_MIME[config.protocol])
+    .header('Content-Disposition', `attachment; filename="${filename}"`)
+    .send(body);
 }
 
 function sendCsv(reply: FastifyReply, body: string, filename: string): FastifyReply {

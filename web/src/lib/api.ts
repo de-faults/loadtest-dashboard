@@ -51,7 +51,30 @@ export const api = {
     req<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(patch) }),
 
   defaults: (protocol: Protocol) => req<RunConfig>(`/api/defaults/${protocol}`),
-  example: (protocol: Protocol) => req<{ filename: string; content: string }>(`/api/examples/${protocol}`),
+  importScript: (body: { content: string; filename: string; protocol: Protocol | 'auto' }) =>
+    req<{ protocol: Protocol; config: RunConfig; warnings: string[]; detected: boolean }>(
+      '/api/import', { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Returns the generated script as a blob so the browser can save it. */
+  async exportScript(config: RunConfig, name: string): Promise<{ blob: Blob; filename: string }> {
+    const token = getToken();
+    const res = await fetch('/api/export/script', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'x-dashboard-token': token } : {}) },
+      body: JSON.stringify({ config, name }),
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json() as { error?: unknown };
+        detail = typeof body.error === 'string' ? body.error : JSON.stringify(body.error);
+      } catch { /* non-JSON error body */ }
+      throw new Error(detail);
+    }
+    const disposition = res.headers.get('Content-Disposition') ?? '';
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? 'script.txt';
+    return { blob: await res.blob(), filename };
+  },
 
   profiles: () => req<Profile[]>('/api/profiles'),
   saveProfile: (p: { id?: string; name: string; protocol: Protocol; config: RunConfig }) =>
