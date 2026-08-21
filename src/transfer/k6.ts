@@ -21,6 +21,9 @@ import type { CheckSpec, RestConfig, RunConfig, ThresholdSpec } from '../shared/
  * recognises, and reports the rest as warnings rather than silently dropping it.
  */
 
+/** k6's default HTTP request timeout when `params.timeout` is absent. */
+const K6_DEFAULT_TIMEOUT_SEC = 60;
+
 // ─── Export ──────────────────────────────────────────────────────────────────
 
 export function toK6Script(config: RunConfig): string {
@@ -214,7 +217,9 @@ export function fromK6Script(source: string): ImportResult {
     // Metadata headers, when present, are the user's originals — do not let the
     // script's effective headers (which include injected ones) overwrite them.
     if (req.headers && !meta) rest.headers = req.headers;
-    if (req.timeoutSec !== null) rest.timeoutSec = req.timeoutSec;
+    // No explicit timeout means k6's own default (60s), not this form's default.
+    // Carrying the form default over would quietly halve the timeout on import.
+    rest.timeoutSec = req.timeoutSec ?? K6_DEFAULT_TIMEOUT_SEC;
     if (req.redirects !== null) rest.followRedirects = req.redirects > 0;
     if (req.body !== undefined) {
       rest.body = req.body ?? '';
