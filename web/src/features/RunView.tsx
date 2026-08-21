@@ -143,6 +143,9 @@ export function RunView(props: {
   ], [samples, t]);
 
   const hasLag = samples.some((s) => s.consumerLag != null);
+  // A Kafka run that asked for lag but produced none is a fact worth showing.
+  // Hiding the panel made it look like the feature was missing.
+  const wantsLag = isKafka && detail?.config.kafka?.monitorLag === true;
   const profile = props.profiles.find((p) => p.id === selectedProfile);
 
   return (
@@ -242,10 +245,12 @@ export function RunView(props: {
               </Panel>
             </div>
 
-            {hasLag ? (
+            {hasLag || wantsLag ? (
               <div className="col-12">
                 <Panel title={t('metrics.consumerLag')}>
-                  <TimeSeries x={x} series={lagSeries} height={190} />
+                  {hasLag
+                    ? <TimeSeries x={x} series={lagSeries} height={190} />
+                    : <Empty text={t('metrics.noLagSamples')} />}
                 </Panel>
               </div>
             ) : null}

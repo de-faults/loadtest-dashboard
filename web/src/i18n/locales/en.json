@@ -76,7 +76,8 @@
     "distribution": "Latency distribution",
     "consumerLag": "Consumer lag",
     "peak": "peak",
-    "avgShort": "avg"
+    "avgShort": "avg",
+    "noLagSamples": "No lag samples. Either no consumer group is committing offsets on this topic, or the lag sampler could not reach the broker — check the run log."
   },
   "run": {
     "title": "Run",
@@ -219,7 +220,10 @@
       "caution": "CAUTION",
       "warning": "WARNING",
       "critical": "CRITICAL"
-    }
+    },
+    "noGroups": "No consumer group has committed offsets on these topics — there is no lag to report yet.",
+    "noLagYet": "Collecting — the lag graph needs at least two samples.",
+    "noGroupMatch": "No consumer group matches the current filter."
   },
   "settings": {
     "title": "Settings",

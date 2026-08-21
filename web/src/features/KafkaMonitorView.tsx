@@ -152,21 +152,24 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
                 </div>
               }
             >
-              {series.length ? <TimeSeries x={x} series={series} height={230} yLabel={t('kafka.lag')} />
-                : <Empty text={t('common.empty')} />}
+              {series.length
+                ? <TimeSeries x={x} series={series} height={230} yLabel={t('kafka.lag')} />
+                : <Empty text={payload.groups.length ? t('kafka.noLagYet') : t('kafka.noGroups')} />}
             </Panel>
           </div>
 
           <div className="col-12">
             <Panel title={`${t('kafka.groups')} (${groups.length})`}>
-              {groups.length === 0 ? <Empty text={t('common.empty')} /> : groups.map((g) => (
+              {groups.length === 0 ? (
+                <Empty text={groupFilter ? t('kafka.noGroupMatch') : t('kafka.noGroups')} />
+              ) : groups.map((g) => (
                 <div key={g.groupId} style={{
                   border: '1px solid var(--border)', borderRadius: 4,
                   padding: 10, marginBottom: 8, background: 'var(--bg-alt)',
                 }}>
                   <div className="inline" style={{ flexWrap: 'wrap', marginBottom: 8 }}>
                     <strong style={{ color: 'var(--accent)' }}>{g.groupId}</strong>
-                    <Badge tone={g.state === 'Stable' ? 'pass' : g.state === 'Dead' ? 'fail' : 'warn'}>{g.state}</Badge>
+                    <Badge tone={stateTone(g.state)}>{stateLabel(g.state)}</Badge>
                     <span className="stat-sub">{g.memberCount} {t('kafka.members')}</span>
                     <Badge tone={healthTone(g.totalLag)}>{t(`kafka.health.${healthKey(g.totalLag)}`)}</Badge>
                     <span className="spacer" style={{ flex: 1 }} />
@@ -212,6 +215,28 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
 function padStart(values: number[], len: number): Array<number | null> {
   if (values.length >= len) return values.slice(-len);
   return [...Array<number | null>(len - values.length).fill(null), ...values];
+}
+
+/**
+ * Kafka reports group state as a numeric enum over this client, so the badge
+ * showed a bare "5" and the Stable/Dead comparisons never matched.
+ */
+const GROUP_STATES: Record<string, string> = {
+  '0': 'Unknown', '1': 'PreparingRebalance', '2': 'CompletingRebalance',
+  '3': 'Stable', '4': 'Dead', '5': 'Empty',
+};
+
+function stateLabel(state: string | number): string {
+  return GROUP_STATES[String(state)] ?? String(state);
+}
+
+function stateTone(state: string | number): 'pass' | 'fail' | 'warn' | 'muted' {
+  switch (stateLabel(state)) {
+    case 'Stable': return 'pass';
+    case 'Dead': return 'fail';
+    case 'Empty': case 'Unknown': return 'muted';
+    default: return 'warn';
+  }
 }
 
 function lagClass(lag: number): string {
