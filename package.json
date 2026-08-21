@@ -1,0 +1,40 @@
+{
+  "name": "loadtest-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "dev:web": "npm --prefix web run dev",
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && npm --prefix web run build",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && npm --prefix web run typecheck && node scripts/check-i18n.mjs",
+    "postinstall": "npm --prefix web install --no-audit --no-fund",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "target:http": "node tools/http-target.mjs",
+    "target:ws": "node tools/ws-echo-target.mjs"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@fastify/static": "^8.0.3",
+    "fastify": "^5.2.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1"
+  },
+  "optionalDependencies": {
+    "@confluentinc/kafka-javascript": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true,
+    "@confluentinc/kafka-javascript@1.10.0": true
+  }
+}

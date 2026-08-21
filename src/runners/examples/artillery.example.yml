@@ -1,0 +1,27 @@
+# Custom Artillery script. Runs in Artillery's own engine.
+#
+# The dashboard injects its `ltd-publish` plugin into config.plugins at run time
+# so the live charts keep working — you do not need to add it yourself, and any
+# plugins you declare here are preserved.
+config:
+  target: "ws://127.0.0.1:4398"
+  phases:
+    - name: warmup
+      duration: 10
+      arrivalRate: 5
+    - name: ramp
+      duration: 20
+      arrivalRate: 5
+      rampTo: 40
+  ws:
+    headers:
+      x-client: loadtest-dashboard
+
+scenarios:
+  - engine: ws
+    name: ping-pong
+    flow:
+      - send: '{"type":"ping","t":"{{ $timestamp }}"}'
+      - think: 1
+      - send: '{"type":"ping","seq":2}'
+      - think: 1

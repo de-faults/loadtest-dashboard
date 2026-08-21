@@ -1,0 +1,86 @@
+import type {
+  AppSettings, Profile, Protocol, RunConfig, RunRow, RunSummary,
+  RunnerAvailability, WindowMetrics,
+} from '@shared/types.ts';
+
+const TOKEN_KEY = 'ltd.token';
+
+export function setToken(token: string): void { localStorage.setItem(TOKEN_KEY, token); }
+export function getToken(): string { return localStorage.getItem(TOKEN_KEY) ?? ''; }
+
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken();
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-dashboard-token': token } : {}),
+      ...init?.headers,
+    },
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json() as { error?: unknown };
+      detail = typeof body.error === 'string' ? body.error : JSON.stringify(body.error);
+    } catch { /* non-JSON error body */ }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<T>;
+}
+
+export interface RunDetail extends RunRow {
+  config: RunConfig;
+  histogram: string | null;
+  samples: WindowMetrics[];
+  logs: Array<{ ts: number; level: string; line: string }>;
+}
+
+export const api = {
+  health: () => req<{ ok: boolean; version: string }>('/api/health'),
+  availability: () => req<RunnerAvailability>('/api/availability'),
+  meta: () => req<{
+    metrics: string[];
+    librdkafkaHints: string[];
+    headerHints: string[];
+    headerValueHints: Record<string, string[]>;
+  }>('/api/meta'),
+
+  settings: () => req<AppSettings>('/api/settings'),
+  saveSettings: (patch: Partial<AppSettings>) =>
+    req<AppSettings>('/api/settings', { method: 'PUT', body: JSON.stringify(patch) }),
+
+  defaults: (protocol: Protocol) => req<RunConfig>(`/api/defaults/${protocol}`),
+  example: (protocol: Protocol) => req<{ filename: string; content: string }>(`/api/examples/${protocol}`),
+
+  profiles: () => req<Profile[]>('/api/profiles'),
+  saveProfile: (p: { id?: string; name: string; protocol: Protocol; config: RunConfig }) =>
+    req<Profile>('/api/profiles', { method: 'POST', body: JSON.stringify(p) }),
+  deleteProfile: (id: string) => req<{ ok: true }>(`/api/profiles/${id}`, { method: 'DELETE' }),
+
+  runs: () => req<RunRow[]>('/api/runs'),
+  activeRuns: () => req<Array<{ runId: string; protocol: Protocol; profileName: string; startedAt: number }>>('/api/runs/active'),
+  run: (id: string) => req<RunDetail>(`/api/runs/${id}`),
+  startRun: (body: { profileId?: string; profileName?: string; config?: RunConfig }) =>
+    req<{ runId: string; target: string }>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
+  stopRun: (id: string) => req<{ ok: true }>(`/api/runs/${id}/stop`, { method: 'POST' }),
+  deleteRun: (id: string) => req<{ ok: true }>(`/api/runs/${id}`, { method: 'DELETE' }),
+
+  kafkaMonitor: () => req<{ running: boolean; bootstrapServers: string | null; intervalSec: number }>('/api/kafka/monitor'),
+  startKafkaMonitor: (bootstrapServers: string, intervalSec: number) =>
+    req<{ running: boolean }>('/api/kafka/monitor/start', {
+      method: 'POST', body: JSON.stringify({ bootstrapServers, intervalSec }),
+    }),
+  stopKafkaMonitor: () => req<{ running: boolean }>('/api/kafka/monitor/stop', { method: 'POST' }),
+};
+
+/** Browser downloads must carry the token too, so build the URL with it. */
+export function csvUrl(path: string, params: Record<string, string | undefined>): string {
+  const url = new URL(path, window.location.origin);
+  for (const [k, v] of Object.entries(params)) if (v) url.searchParams.set(k, v);
+  const token = getToken();
+  if (token) url.searchParams.set('token', token);
+  return url.toString();
+}
+
+export type { RunSummary };

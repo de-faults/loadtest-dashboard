@@ -1,0 +1,91 @@
+# ─── Dependencies & build output ─────────────────────────────────────────────
+node_modules/
+dist/
+build/
+out/
+.vite/
+*.tsbuildinfo
+
+# ─── Secrets & credentials ───────────────────────────────────────────────────
+# .env.example is intentionally tracked; every real env file is not.
+.env
+.env.*
+!.env.example
+*.local
+secrets.json
+credentials.json
+
+# Keys, certs, keystores
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+*.der
+id_rsa*
+id_ed25519*
+*.asc
+*.gpg
+
+# Cloud / tool credential stores
+.npmrc
+.netrc
+.aws/
+.gcloud/
+.kube/
+*.kubeconfig
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# ─── Runtime data ────────────────────────────────────────────────────────────
+# SQLite holds run history, config snapshots and the secrets table.
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+
+# Load-test artifacts may embed request bodies, tokens and target hostnames.
+*.ndjson
+summary.json
+report.json
+k6-results/
+artillery-report*
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─── Local planning ──────────────────────────────────────────────────────────
+to-do.md
+
+# ─── Editor / OS ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── Test & coverage ─────────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+*.lcov
+
+# ─── Temp ────────────────────────────────────────────────────────────────────
+tmp/
+temp/
+.cache/
