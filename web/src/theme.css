@@ -425,6 +425,52 @@ pre.logs { white-space: pre; }
   min-height: 300px; font-size: 11.5px; line-height: 1.55;
   white-space: pre; overflow: auto; tab-size: 2;
 }
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.modal-panel {
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: 6px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  width: min(760px, 100%);
+  /* Never taller than the viewport; the body scrolls instead. */
+  max-height: min(86vh, 100%);
+  display: flex; flex-direction: column; outline: none;
+}
+.modal-wide { width: min(1040px, 100%); }
+.modal-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+.modal-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-head .spacer { flex: 1; min-width: 0; }
+.modal-x {
+  border: 0; background: transparent; color: var(--text-faint);
+  font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 4px; width: auto;
+}
+.modal-x:hover { background: var(--panel-alt); color: var(--text); }
+.modal-body { padding: 12px; overflow: auto; flex: 1; min-height: 0; }
+.modal-foot {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 12px; border-top: 1px solid var(--border);
+}
+.modal-foot .spacer { flex: 1; min-width: 0; }
+@media (max-width: 560px) {
+  .modal-backdrop { padding: 0; align-items: stretch; }
+  .modal-panel { max-height: 100%; border-radius: 0; border: 0; width: 100%; }
+  .modal-foot .btn { flex: 1 1 auto; justify-content: center; }
+}
+
+.code-view {
+  margin: 0; background: var(--bg-alt); border: 1px solid var(--border);
+  border-radius: 4px; padding: 10px;
+  font-family: 'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace;
+  font-size: 11.5px; line-height: 1.55;
+  white-space: pre; overflow: auto; max-height: 60vh; tab-size: 2;
+}
+
 .paste-box {
   border: 1px solid var(--border); border-radius: 4px;
   padding: 8px; margin-bottom: 10px; background: var(--panel-alt);

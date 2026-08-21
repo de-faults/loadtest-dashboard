@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { Protocol, RunConfig, ScriptConfig } from '@shared/types.ts';
 import { api } from '../lib/api.ts';
 import { CheckField, TextField } from './Fields.tsx';
+import { Modal } from './Modal.tsx';
 
 const MAX_BYTES = 1_000_000;
 
@@ -38,6 +39,8 @@ export function ScriptEditor(props: {
   const [showPaste, setShowPaste] = useState(false);
   const [pasted, setPasted] = useState('');
   const [source, setSource] = useState<Source>('auto');
+  const [preview, setPreview] = useState<{ text: string; filename: string } | null>(null);
+  const [copied, setCopied] = useState(false);
 
   async function importContent(content: string, label: string): Promise<void> {
     if (!content.trim()) { props.onError(t('script.empty')); return; }
@@ -69,18 +72,47 @@ export function ScriptEditor(props: {
 
   async function exportScript(): Promise<void> {
     setBusy(true);
+    setCopied(false);
     try {
       const { blob, filename } = await api.exportScript(props.config, props.profileName);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      setPreview({ text: await blob.text(), filename });
     } catch (e) {
       props.onError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  function download(): void {
+    if (!preview) return;
+    const blob = new Blob([preview.text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = preview.filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function copy(): Promise<void> {
+    if (!preview) return;
+    try {
+      await navigator.clipboard.writeText(preview.text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard API needs a secure context and permission; fall back to a
+      // hidden textarea so copy still works over plain http on a LAN address.
+      const ta = document.createElement('textarea');
+      ta.value = preview.text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (ok) { setCopied(true); setTimeout(() => setCopied(false), 2000); }
+      else props.onError(t('script.copyFailed'));
     }
   }
 
@@ -195,6 +227,30 @@ export function ScriptEditor(props: {
           placeholder="/Users/me/loadtests/checkout.js"
           onChange={(path) => props.onScriptChange({ ...props.script, path })}
         />
+      ) : null}
+
+      {preview ? (
+        <Modal
+          wide
+          title={preview.filename}
+          onClose={() => setPreview(null)}
+          footer={
+            <>
+              <button className="btn btn-primary" onClick={() => void copy()}>
+                {copied ? `✓ ${t('script.copied')}` : `⧉ ${t('script.copy')}`}
+              </button>
+              <button className="btn" onClick={download}>⇩ {t('script.download')}</button>
+              <span className="spacer" />
+              <span className="field-hint">
+                {preview.text.split('\n').length} {t('script.lines')} ·{' '}
+                {new Blob([preview.text]).size.toLocaleString()} B
+              </span>
+              <button className="btn" onClick={() => setPreview(null)}>{t('common.close')}</button>
+            </>
+          }
+        >
+          <pre className="code-view">{preview.text}</pre>
+        </Modal>
       ) : null}
     </>
   );

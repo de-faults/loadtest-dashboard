@@ -271,6 +271,11 @@
     "pastePlaceholder": "Paste a k6 script, Artillery YAML or Kafka YAML here…",
     "pasteHint": "Parsed, never executed. If detection fails, pick the protocol in the dropdown and import again.",
     "pickProtocol": "pick the protocol in the dropdown and import again",
-    "empty": "Nothing to import"
+    "empty": "Nothing to import",
+    "copy": "Copy",
+    "copied": "Copied",
+    "download": "Download",
+    "lines": "lines",
+    "copyFailed": "Could not copy to clipboard"
   }
 }
