@@ -232,7 +232,7 @@ export function applyRetention(keep: number): number {
  * UI and written into exports.
  */
 export function redactConfig(c: RunConfig): RunConfig {
-  const clone = structuredClone(c);
+  const clone = pruneInactive(structuredClone(c));
   if (clone.rest?.auth) {
     if (clone.rest.auth.password) clone.rest.auth.password = '***';
     if (clone.rest.auth.token) clone.rest.auth.token = '***';
@@ -249,6 +249,36 @@ export function redactConfig(c: RunConfig): RunConfig {
     }
   }
   return clone;
+}
+
+/**
+ * Drop fields the active mode does not use.
+ *
+ * A profile deliberately keeps all three load models populated so switching
+ * between them does not lose what you typed. A run snapshot is the durable
+ * record of what actually executed, so carrying the other two models' numbers
+ * there only invites misreading it later.
+ */
+function pruneInactive(c: RunConfig): RunConfig {
+  const rest = c.rest as Record<string, unknown> | undefined;
+  if (rest) {
+    const model = rest.loadModel;
+    if (model !== 'vus') { delete rest.vus; delete rest.vusDurationSec; }
+    if (model !== 'stages') delete rest.stages;
+    if (model !== 'rate') { delete rest.rate; delete rest.rateDurationSec; delete rest.preAllocatedVUs; }
+    const auth = rest.auth as { kind?: string } | undefined;
+    if (auth?.kind === 'none') delete rest.auth;
+  }
+
+  const kafka = c.kafka as Record<string, unknown> | undefined;
+  if (kafka) {
+    if (kafka.payloadType === 'random') delete kafka.payload;
+    else delete kafka.payloadSizeBytes;
+    if (kafka.keyStrategy !== 'fixed') delete kafka.keyValue;
+    if (kafka.latencyMode !== 'end-to-end' && !kafka.monitorLag) delete kafka.consumerGroup;
+  }
+
+  return c;
 }
 
 export default db;
