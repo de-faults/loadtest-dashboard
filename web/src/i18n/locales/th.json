@@ -45,7 +45,8 @@
     "target": "เป้าหมาย",
     "actions": "การกระทำ",
     "newProfile": "โปรไฟล์ใหม่",
-    "confirmDelete": "ต้องการลบถาวรหรือไม่?"
+    "confirmDelete": "ต้องการลบถาวรหรือไม่?",
+    "clear": "ล้าง"
   },
   "protocol": {
     "rest": "REST (k6)",
@@ -252,6 +253,16 @@
     "pathHint": "รันที่ตำแหน่งไฟล์จริง import แบบพาธสัมพัทธ์ open() และไฟล์ CSV จึงยังทำงานได้ ฟอร์มด้านล่างจะไม่ถูกใช้",
     "hint_rest": "k6 JavaScript — อ่านโครงสร้าง ไม่ได้รันไฟล์",
     "hint_socket": "Artillery YAML",
-    "hint_kafka": "ไฟล์ตั้งค่า Kafka แบบ YAML"
+    "hint_kafka": "ไฟล์ตั้งค่า Kafka แบบ YAML",
+    "paste": "วางโค้ด",
+    "importPasted": "นำเข้าโค้ดที่วาง",
+    "loadCurrent": "โหลดค่าปัจจุบัน",
+    "pastedLabel": "โค้ดที่วาง",
+    "autoDetect": "ตรวจอัตโนมัติ",
+    "sourceProtocol": "ถือว่าเป็น",
+    "pastePlaceholder": "วางสคริปต์ k6, Artillery YAML หรือ Kafka YAML ที่นี่…",
+    "pasteHint": "อ่านโครงสร้างเท่านั้น ไม่ได้รันโค้ด ถ้าตรวจโปรโตคอลไม่ได้ ให้เลือกจากดรอปดาวน์แล้วนำเข้าใหม่",
+    "pickProtocol": "เลือกโปรโตคอลจากดรอปดาวน์แล้วนำเข้าใหม่",
+    "empty": "ไม่มีอะไรให้นำเข้า"
   }
 }

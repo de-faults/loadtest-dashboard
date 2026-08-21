@@ -40,6 +40,11 @@ export function importScript(protocol: Protocol, source: string): ImportResult {
 export function detectProtocol(filename: string, source: string): Protocol | null {
   const head = source.slice(0, 4000);
   if (/^\s*protocol\s*:\s*['"]?kafka/m.test(head) || /bootstrapServers|bootstrap\.servers/.test(head)) return 'kafka';
+  // A Kafka document need not name a broker — the load/message keys are enough
+  // to tell it apart from an Artillery script.
+  if (/^\s*topic\s*:/m.test(head) && /^\s*(targetRate|librdkafka|producers|payloadType|maxMessages)\s*:/m.test(head)) {
+    return 'kafka';
+  }
   if (/from\s+['"]k6/.test(head) || /require\(['"]k6/.test(head)) return 'rest';
   if (/^\s*scenarios\s*:/m.test(head) && /^\s*config\s*:/m.test(head)) return 'socket';
   if (/\.ya?ml$/i.test(filename)) return /engine\s*:\s*ws|arrivalRate/.test(head) ? 'socket' : 'kafka';

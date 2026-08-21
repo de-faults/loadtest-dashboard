@@ -10,14 +10,15 @@ export function getToken(): string { return localStorage.getItem(TOKEN_KEY) ?? '
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'x-dashboard-token': token } : {}),
-      ...init?.headers,
-    },
-  });
+  const headers: Record<string, string> = {};
+  // Declare a JSON body only when there is one. Fastify rejects an empty body
+  // sent with content-type json (FST_ERR_CTP_EMPTY_JSON_BODY -> 400), which is
+  // what every bodyless DELETE and stop request used to hit.
+  if (init?.body != null) headers['Content-Type'] = 'application/json';
+  if (token) headers['x-dashboard-token'] = token;
+  Object.assign(headers, init?.headers as Record<string, string> | undefined);
+
+  const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
     let detail = res.statusText;
     try {

@@ -12,6 +12,8 @@ const ACCEPT: Record<Protocol, string> = {
   kafka: '.yml,.yaml,.json',
 };
 
+type Source = 'auto' | Protocol;
+
 /**
  * Import a script into the form, or export the form as a script.
  *
@@ -33,25 +35,36 @@ export function ScriptEditor(props: {
   const [busy, setBusy] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [note, setNote] = useState<string | null>(null);
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasted, setPasted] = useState('');
+  const [source, setSource] = useState<Source>('auto');
 
-  async function onFile(file: File): Promise<void> {
-    if (file.size > MAX_BYTES) { props.onError(t('script.tooBig')); return; }
+  async function importContent(content: string, label: string): Promise<void> {
+    if (!content.trim()) { props.onError(t('script.empty')); return; }
+    if (new Blob([content]).size > MAX_BYTES) { props.onError(t('script.tooBig')); return; }
     setBusy(true);
     setWarnings([]);
     setNote(null);
     try {
-      const content = await file.text();
-      // Let the server sniff the protocol; fall back to the current one.
-      let res = await api.importScript({ content, filename: file.name, protocol: 'auto' })
-        .catch(() => api.importScript({ content, filename: file.name, protocol: props.protocol }));
+      const res = await api.importScript({ content, filename: label, protocol: source });
       setWarnings(res.warnings);
-      setNote(t('script.imported', { file: file.name, protocol: t(`protocol.${res.protocol}`) }));
+      setNote(t('script.imported', { file: label, protocol: t(`protocol.${res.protocol}`) }));
       props.onImported(res.protocol, res.config);
     } catch (e) {
-      props.onError(`${t('script.importFailed')}: ${(e as Error).message}`);
+      // Detection failing is a normal outcome for a pasted fragment — say what
+      // to do about it rather than only what went wrong.
+      const msg = (e as Error).message;
+      props.onError(source === 'auto'
+        ? `${t('script.importFailed')}: ${msg} — ${t('script.pickProtocol')}`
+        : `${t('script.importFailed')}: ${msg}`);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function onFile(file: File): Promise<void> {
+    if (file.size > MAX_BYTES) { props.onError(t('script.tooBig')); return; }
+    await importContent(await file.text(), file.name);
   }
 
   async function exportScript(): Promise<void> {
@@ -71,6 +84,20 @@ export function ScriptEditor(props: {
     }
   }
 
+  /** Load the current form into the paste box so it can be edited and re-imported. */
+  async function loadCurrent(): Promise<void> {
+    setBusy(true);
+    try {
+      const { blob } = await api.exportScript(props.config, props.profileName);
+      setPasted(await blob.text());
+      setShowPaste(true);
+    } catch (e) {
+      props.onError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const usingExternal = props.script.mode === 'path';
 
   return (
@@ -80,6 +107,10 @@ export function ScriptEditor(props: {
       <div className="inline" style={{ marginBottom: 8 }}>
         <button className="btn btn-sm" disabled={busy} onClick={() => fileRef.current?.click()}>
           ⇧ {t('script.import')}
+        </button>
+        <button className={`btn btn-sm ${showPaste ? 'active' : ''}`} disabled={busy}
+          onClick={() => setShowPaste((v) => !v)}>
+          ⌨ {t('script.paste')}
         </button>
         <button className="btn btn-sm" disabled={busy} onClick={() => void exportScript()}>
           ⇩ {t('script.export')}
@@ -98,6 +129,43 @@ export function ScriptEditor(props: {
           e.target.value = '';
         }}
       />
+
+      {showPaste ? (
+        <div className="paste-box">
+          <div className="inline" style={{ marginBottom: 6 }}>
+            <select
+              style={{ width: 'auto' }}
+              value={source}
+              onChange={(e) => setSource(e.target.value as Source)}
+              title={t('script.sourceProtocol')}
+            >
+              <option value="auto">{t('script.autoDetect')}</option>
+              <option value="rest">{t('protocol.rest')}</option>
+              <option value="socket">{t('protocol.socket')}</option>
+              <option value="kafka">{t('protocol.kafka')}</option>
+            </select>
+            <button className="btn btn-sm btn-primary" disabled={busy || !pasted.trim()}
+              onClick={() => void importContent(pasted, t('script.pastedLabel'))}>
+              {t('script.importPasted')}
+            </button>
+            <button className="btn btn-sm" disabled={busy} onClick={() => void loadCurrent()}>
+              {t('script.loadCurrent')}
+            </button>
+            <button className="btn btn-sm" disabled={!pasted} onClick={() => setPasted('')}>
+              {t('common.clear')}
+            </button>
+            <span className="field-hint">{new Blob([pasted]).size.toLocaleString()} B</span>
+          </div>
+          <textarea
+            className="script-area"
+            spellCheck={false}
+            placeholder={t('script.pastePlaceholder')}
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+          />
+          <div className="field-hint">{t('script.pasteHint')}</div>
+        </div>
+      ) : null}
 
       {note ? <div className="script-note">✓ {note}</div> : null}
 

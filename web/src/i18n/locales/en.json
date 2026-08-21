@@ -45,7 +45,8 @@
     "target": "Target",
     "actions": "Actions",
     "newProfile": "New profile",
-    "confirmDelete": "Delete this permanently?"
+    "confirmDelete": "Delete this permanently?",
+    "clear": "Clear"
   },
   "protocol": {
     "rest": "REST (k6)",
@@ -252,6 +253,16 @@
     "pathHint": "Executed where it lives, so relative imports, open() and CSV feeds keep working. The form below is ignored.",
     "hint_rest": "k6 JavaScript — parsed, not executed.",
     "hint_socket": "Artillery YAML.",
-    "hint_kafka": "Kafka YAML config."
+    "hint_kafka": "Kafka YAML config.",
+    "paste": "Paste code",
+    "importPasted": "Import pasted code",
+    "loadCurrent": "Load current config",
+    "pastedLabel": "pasted code",
+    "autoDetect": "Detect automatically",
+    "sourceProtocol": "Treat as",
+    "pastePlaceholder": "Paste a k6 script, Artillery YAML or Kafka YAML here…",
+    "pasteHint": "Parsed, never executed. If detection fails, pick the protocol in the dropdown and import again.",
+    "pickProtocol": "pick the protocol in the dropdown and import again",
+    "empty": "Nothing to import"
   }
 }
