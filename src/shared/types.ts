@@ -126,9 +126,18 @@ export interface RestConfig {
   followRedirects: boolean;
   insecureSkipTlsVerify: boolean;
   thinkTimeMs: number;
-  /** 'stages' = ramping VUs, 'rate' = constant arrival rate. */
-  loadModel: 'stages' | 'rate';
+  /**
+   * 'vus'    = a fixed number of VUs for a fixed duration (k6 vus/duration)
+   * 'stages' = ramping VUs through a list of stages
+   * 'rate'   = constant arrival rate, independent of response time
+   */
+  loadModel: 'vus' | 'stages' | 'rate';
+  /** loadModel 'vus' */
+  vus: number;
+  vusDurationSec: number;
+  /** loadModel 'stages' */
   stages: Stage[];
+  /** loadModel 'rate' */
   rate: number;
   rateDurationSec: number;
   preAllocatedVUs: number;

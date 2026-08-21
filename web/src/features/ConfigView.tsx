@@ -264,14 +264,23 @@ function RestForm({ value, headerHints, headerValueHints, onChange }: {
       <div className="section-title">{t('config.load')}</div>
       <div className="field-row">
         <SelectField label={t('config.loadModel')} value={value.loadModel}
+          hint={t(`config.loadModelHint_${value.loadModel}`)}
           options={[
-            { value: 'stages' as const, label: t('config.stages') },
-            { value: 'rate' as const, label: t('config.rate') },
+            { value: 'vus' as const, label: t('config.modelVus') },
+            { value: 'stages' as const, label: t('config.modelStages') },
+            { value: 'rate' as const, label: t('config.modelRate') },
           ]}
           onChange={(v) => set('loadModel', v)} />
       </div>
 
-      {value.loadModel === 'stages' ? (
+      {value.loadModel === 'vus' ? (
+        <div className="field-row">
+          <NumberField label={t('config.vus')} value={value.vus} min={1}
+            onChange={(v) => set('vus', v)} />
+          <NumberField label={t('config.vusDuration')} value={value.vusDurationSec} min={1}
+            onChange={(v) => set('vusDurationSec', v)} />
+        </div>
+      ) : value.loadModel === 'stages' ? (
         <div className="field">
           <span className="field-label">{t('config.stages')}</span>
           {value.stages.map((s, i) => {

@@ -177,7 +177,15 @@
       "latency_under": "Latency under (ms)"
     },
     "adhocName": "Ad-hoc run",
-    "statusHint": "Single, union or range — 200 · 200|201 · 2xx · 200-204"
+    "statusHint": "Single, union or range — 200 · 200|201 · 2xx · 200-204",
+    "modelVus": "Constant VUs",
+    "modelStages": "Ramping stages",
+    "modelRate": "Constant arrival rate",
+    "vus": "Virtual users",
+    "vusDuration": "Duration (s)",
+    "loadModelHint_vus": "A fixed number of VUs for a fixed time — k6 vus/duration.",
+    "loadModelHint_stages": "Ramp the VU count through a list of stages.",
+    "loadModelHint_rate": "Fixed requests per second regardless of response time."
   },
   "history": {
     "title": "Run history",

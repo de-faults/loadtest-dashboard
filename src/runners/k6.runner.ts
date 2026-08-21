@@ -176,7 +176,10 @@ function buildScriptConfig(cfg: RestConfig, ctx: RunnerContext, thresholds: Reco
     summaryTrendStats: ['min', 'avg', 'p(90)', 'p(95)', 'p(99)', 'max'],
   };
 
-  if (cfg.loadModel === 'rate') {
+  if (cfg.loadModel === 'vus') {
+    k6Options.vus = cfg.vus;
+    k6Options.duration = `${cfg.vusDurationSec}s`;
+  } else if (cfg.loadModel === 'rate') {
     k6Options.scenarios = {
       constant_rate: {
         executor: 'constant-arrival-rate',

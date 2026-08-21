@@ -28,7 +28,10 @@ export function toK6Script(config: RunConfig): string {
   const { thresholds, unmapped } = toK6Thresholds(config.thresholds);
 
   const options: Record<string, unknown> = {};
-  if (cfg.loadModel === 'rate') {
+  if (cfg.loadModel === 'vus') {
+    options.vus = cfg.vus;
+    options.duration = `${cfg.vusDurationSec}s`;
+  } else if (cfg.loadModel === 'rate') {
     options.scenarios = {
       constant_rate: {
         executor: 'constant-arrival-rate',
@@ -275,6 +278,8 @@ function applyOptions(
 
   const scenarios = asRecord(options.scenarios);
   const stages = asArray(options.stages);
+  const plainVus = asNumber(options.vus);
+  const plainDuration = toSeconds(options.duration);
 
   if (scenarios) {
     const first = Object.values(scenarios).map(asRecord).find((s) => s !== null);
@@ -295,6 +300,15 @@ function applyOptions(
     rest.loadModel = 'stages';
     const st = readStages(stages);
     if (st.length) rest.stages = st;
+  } else if (plainVus !== null || plainDuration !== null) {
+    // The most common k6 shape: a fixed VU count for a fixed duration.
+    rest.loadModel = 'vus';
+    if (plainVus !== null) rest.vus = plainVus;
+    if (plainDuration !== null) rest.vusDurationSec = plainDuration;
+    if (plainVus === null) warnings.push('`duration` without `vus` — VU count left at default');
+    if (plainDuration === null) warnings.push('`vus` without `duration` — duration left at default');
+  } else {
+    warnings.push('options declares no vus/duration, stages or scenarios — load model left at defaults');
   }
 
   const th = asRecord(options.thresholds);

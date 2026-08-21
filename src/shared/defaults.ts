@@ -11,7 +11,9 @@ export const DEFAULT_REST: RestConfig = {
   followRedirects: true,
   insecureSkipTlsVerify: false,
   thinkTimeMs: 0,
-  loadModel: 'stages',
+  loadModel: 'vus',
+  vus: 10,
+  vusDurationSec: 60,
   stages: [
     { duration: 10, target: 10 },
     { duration: 30, target: 50 },
