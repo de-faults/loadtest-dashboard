@@ -6,7 +6,7 @@ from the UI, live metrics over SSE, English/Thai interface, CSV report export.
 | Protocol | Engine | Notes |
 |---|---|---|
 | REST | [k6](https://k6.io) | external binary, live NDJSON metrics |
-| WebSocket | [Artillery](https://artillery.io) | external binary + bundled live-stats plugin |
+| WebSocket | [Artillery](https://artillery.io) | raw `ws` or Socket.IO; external binary + bundled live-stats plugin |
 | Kafka | `@confluentinc/kafka-javascript` | in-process, raw librdkafka properties |
 
 ## Quick start
@@ -40,8 +40,9 @@ Binary paths are editable in the UI, so a non-PATH install needs no env vars.
 ### Local targets for trying it out
 
 ```bash
-npm run target:http   # HTTP on :4399, fails every 25th request
-npm run target:ws     # WebSocket echo on :4398
+npm run target:http      # HTTP on :4399, fails every 25th request
+npm run target:ws        # WebSocket echo on :4398
+npm run target:socketio  # Socket.IO on :4396, replies via ack and event
 ```
 
 Kafka in one line:
@@ -81,7 +82,13 @@ real number.
   pass/fail come from the same `http_req_duration` point (k6 tags it with
   `expected_response`). k6's `handleSummary` output is authoritative for its own
   thresholds, and its exit code (99 = threshold breach) can independently fail the run.
-- **WebSocket** — Artillery only writes `--output` at the end, so live charts come from
+- **WebSocket / Socket.IO** — two engines. Raw `ws` sends plain frames. Socket.IO
+  sends named events, optionally waits for the server's acknowledgement callback,
+  and can wait on a server-pushed event; assertions are a JSON path plus expected
+  value. With acknowledgements the run reports a genuine emit→ack round trip
+  (`socketio.response_time`); without one, latency falls back to
+  `vusers.session_length` — whole-scenario duration, think time included — and the
+  two are never mixed into the same distribution. Artillery only writes `--output` at the end, so live charts come from
   a bundled output plugin that POSTs each `stats` tick to a loopback ingest endpoint.
   Artillery reports quantiles rather than raw samples, so the distribution is
   reconstructed piecewise between the reported points. If the flow has no round-trip

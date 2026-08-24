@@ -412,13 +412,71 @@ pre.logs { white-space: pre; }
   color: var(--text-faint);
 }
 
+/* Socket flow step: a card per step, header row + body, like a request builder. */
+.step-item {
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel-alt);
+  padding: 8px; margin-bottom: 8px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.step-head .spacer { flex: 1; min-width: 0; }
+.step-index {
+  width: 20px; height: 20px; flex-shrink: 0;
+  border-radius: 50%; background: var(--border); color: var(--text-weak);
+  font-size: 10.5px; display: grid; place-items: center;
+}
+.step-event {
+  flex: 1 1 160px; min-width: 0; width: auto;
+  font-family: 'JetBrains Mono', monospace;
+}
+.step-ack {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-weak); white-space: nowrap;
+}
+.step-ack .checkbox { width: auto; }
+.step-body {
+  min-height: 60px; font-size: 11.5px; white-space: pre; overflow: auto;
+}
+
 .flow-row {
   display: grid;
   grid-template-columns: 110px minmax(0, 1fr) auto;
   gap: 6px; align-items: center; margin-bottom: 5px;
 }
 @media (max-width: 560px) {
-  .flow-row { grid-template-columns: 100px minmax(0, 1fr) auto; }
+  /* Socket flow step: a card per step, header row + body, like a request builder. */
+.step-item {
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel-alt);
+  padding: 8px; margin-bottom: 8px;
+}
+.step-head {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.step-head .spacer { flex: 1; min-width: 0; }
+.step-index {
+  width: 20px; height: 20px; flex-shrink: 0;
+  border-radius: 50%; background: var(--border); color: var(--text-weak);
+  font-size: 10.5px; display: grid; place-items: center;
+}
+.step-event {
+  flex: 1 1 160px; min-width: 0; width: auto;
+  font-family: 'JetBrains Mono', monospace;
+}
+.step-ack {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-weak); white-space: nowrap;
+}
+.step-ack .checkbox { width: auto; }
+.step-body {
+  min-height: 60px; font-size: 11.5px; white-space: pre; overflow: auto;
+}
+
+.flow-row { grid-template-columns: 100px minmax(0, 1fr) auto; }
 }
 
 .script-area {

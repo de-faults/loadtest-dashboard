@@ -144,15 +144,37 @@ export interface RestConfig {
 }
 
 export interface SocketFlowStep {
-  kind: 'send' | 'think' | 'expect';
-  /** payload for send, seconds for think, substring for expect */
+  /**
+   * ws engine:       send | think | expect
+   * socket.io engine: emit | think | listen
+   */
+  kind: 'send' | 'think' | 'expect' | 'emit' | 'listen';
+  /** send/emit: payload · think: seconds · expect: substring */
   value: string;
+  /** emit/listen: the Socket.IO event name (Artillery calls it the channel). */
+  event?: string;
+  /** emit: wait for the server's acknowledgement callback before continuing. */
+  acknowledge?: boolean;
+  /** emit-ack / listen: JSON path to assert on, e.g. "$.status". */
+  matchPath?: string;
+  /** Expected value at matchPath. Empty means "any response is fine". */
+  matchValue?: string;
+  /** Per-step namespace override; falls back to the connection namespace. */
+  namespace?: string;
 }
 
 export interface SocketConfig {
+  /** 'ws' = raw WebSocket, 'socketio' = Socket.IO (named events + acks). */
+  engine: 'ws' | 'socketio';
   url: string;
   headers: Record<string, string>;
   subprotocols: string[];
+  /** Socket.IO only: connection namespace, e.g. "/chat". */
+  namespace: string;
+  /** Socket.IO only: handshake query parameters (token, room, ...). */
+  query: Record<string, string>;
+  /** Socket.IO only: restrict transports, e.g. ["websocket"]. */
+  transports: string[];
   phases: Array<{ name: string; durationSec: number; arrivalRate: number; rampTo?: number }>;
   flow: SocketFlowStep[];
   /** Measure round-trip by pairing each send with the next expect. */

@@ -31,9 +31,14 @@ export const restSchema = z.object({
 });
 
 export const socketSchema = z.object({
-  url: z.string().regex(/^wss?:\/\//, 'must start with ws:// or wss://'),
+  engine: z.enum(['ws', 'socketio']),
+  // Socket.IO is reached over http(s); raw WebSocket over ws(s).
+  url: z.string().regex(/^(wss?|https?):\/\//, 'must start with ws://, wss://, http:// or https://'),
   headers: kv,
   subprotocols: z.array(z.string()),
+  namespace: z.string().max(200),
+  query: kv,
+  transports: z.array(z.string()),
   phases: z.array(z.object({
     name: z.string(),
     durationSec: z.number().int().min(1),
@@ -41,8 +46,13 @@ export const socketSchema = z.object({
     rampTo: z.number().int().min(1).optional(),
   })).min(1),
   flow: z.array(z.object({
-    kind: z.enum(['send', 'think', 'expect']),
+    kind: z.enum(['send', 'think', 'expect', 'emit', 'listen']),
     value: z.string(),
+    event: z.string().max(200).optional(),
+    acknowledge: z.boolean().optional(),
+    matchPath: z.string().max(200).optional(),
+    matchValue: z.string().optional(),
+    namespace: z.string().max(200).optional(),
   })),
   measureRoundTrip: z.boolean(),
 });

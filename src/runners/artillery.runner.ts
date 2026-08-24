@@ -9,7 +9,7 @@ import { PORT } from '../config.ts';
 import { probe } from './k6.runner.ts';
 import { materializeScript, usesCustomScript } from './script.ts';
 import type { Runner, RunnerContext, RunnerResult } from './types.ts';
-import type { SocketConfig } from '../shared/types.ts';
+import type { SocketConfig, SocketFlowStep } from '../shared/types.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = join(HERE, 'assets');
@@ -31,7 +31,14 @@ export interface ArtilleryReport {
  * LEGACY_METRICS_FORMAT=false its counters are per-period, so concurrent
  * virtual users are the running total of created minus finished.
  */
-interface IngestState { ctx: RunnerContext; created: number; finished: number; warnedLatency?: boolean }
+interface IngestState {
+  ctx: RunnerContext;
+  created: number;
+  finished: number;
+  warnedLatency?: boolean;
+  /** True once a genuine round-trip metric has been reported. */
+  sawRtt?: boolean;
+}
 const ingest = new Map<string, IngestState>();
 
 export function ingestArtilleryReport(runId: string, body: { kind: string; report: ArtilleryReport }): boolean {
@@ -151,7 +158,7 @@ function applyReport(state: IngestState, report: ArtilleryReport): void {
   const c = report.counters ?? {};
   const s = report.summaries ?? {};
 
-  const sent = c['websocket.messages_sent'] ?? c['http.requests'] ?? c['vusers.created'] ?? 0;
+  const sent = c['socketio.emit'] ?? c['websocket.messages_sent'] ?? c['http.requests'] ?? c['vusers.created'] ?? 0;
   const failed = (c['vusers.failed'] ?? 0) + (c['websocket.send_errors'] ?? 0);
 
   state.created += c['vusers.created'] ?? 0;
@@ -161,12 +168,17 @@ function applyReport(state: IngestState, report: ArtilleryReport): void {
   // Prefer true round-trip time when the flow measured it. `vusers.session_length`
   // is the fallback and measures something else — whole-scenario duration,
   // think time included — so say so rather than passing it off as latency.
-  const rtt = s['websocket.response_time'] ?? s['http.response_time'];
-  const lat = rtt ?? s['vusers.session_length'];
-  if (!state.warnedLatency && lat) {
+  // socketio.response_time is a genuine emit→ack/response round trip.
+  const rtt = s['socketio.response_time'] ?? s['websocket.response_time'] ?? s['http.response_time'];
+  if (rtt) state.sawRtt = true;
+  // Never mix the two: substituting session length for periods that reported no
+  // round-trip time folds two different quantities into one distribution and
+  // drags the percentiles towards the much larger session numbers.
+  const lat = rtt ?? (state.sawRtt ? undefined : s['vusers.session_length']);
+  if (!state.warnedLatency && (rtt || s['vusers.session_length'])) {
     state.warnedLatency = true;
     ctx.log(rtt ? 'info' : 'warn', rtt
-      ? 'latency = websocket round-trip time'
+      ? 'latency = socket round-trip time (emit to ack/response)'
       : 'latency = vusers.session_length (whole scenario incl. think time) — no round-trip metric reported');
   }
   const count = sent > 0 ? sent : (lat?.count ?? 0);
@@ -196,14 +208,83 @@ function applyReport(state: IngestState, report: ArtilleryReport): void {
   if (ok != null || notOk != null) ctx.agg.addCheck('expect', ok ?? 0, notOk ?? 0);
 }
 
-function buildScript(cfg: SocketConfig, runId: string): Record<string, unknown> {
+export function buildFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
+  return cfg.engine === 'socketio' ? buildSocketIoFlow(cfg) : buildWsFlow(cfg);
+}
+
+/**
+ * Socket.IO flow: named events, optional acknowledgement callbacks, and
+ * server-pushed events to wait for.
+ */
+function buildSocketIoFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
   const flow: Array<Record<string, unknown>> = [];
   for (const step of cfg.flow) {
-    if (step.kind === 'send') {
+    if (step.kind === 'think') {
+      flow.push({ think: Number(step.value) || 1 });
+      continue;
+    }
+    if (step.kind === 'listen') {
+      // A listen with no preceding emit has nothing to attach to: the engine
+      // only reads `response` alongside an `emit`.
+      const prev = flow[flow.length - 1];
+      if (prev && 'emit' in prev) {
+        prev.response = {
+          channel: step.event ?? '',
+          ...matchSpec(step),
+        };
+      }
+      continue;
+    }
+    // 'emit' — and 'send' too, so switching engines keeps existing steps usable.
+    const entry: Record<string, unknown> = {
+      emit: { channel: step.event ?? 'message', data: parseData(step.value) },
+    };
+    if (step.namespace || cfg.namespace) entry.namespace = step.namespace || cfg.namespace;
+    if (step.acknowledge) entry.acknowledge = matchSpec(step);
+    flow.push(entry);
+  }
+  return flow.length ? flow : [{ think: 1 }];
+}
+
+/** Shared by acknowledge and response: assert on a JSON path, or accept anything. */
+function matchSpec(step: SocketFlowStep): Record<string, unknown> {
+  if (!step.matchPath) return {};
+  return { match: { json: normalizeJsonPath(step.matchPath), value: step.matchValue ?? '' } };
+}
+
+/**
+ * Point a user-written path at the acknowledgement payload.
+ *
+ * The engine matches against `JSON.stringify(args)` — the array of callback
+ * arguments — so a plain `$.status` can never match. Paths are rewritten to
+ * address the first argument, which is where a Socket.IO ack payload lives.
+ * An explicit `$[...]` is left alone so raw addressing stays possible.
+ */
+export function normalizeJsonPath(path: string): string {
+  const p = path.trim();
+  if (p.startsWith('$[')) return p;
+  const bare = p.replace(/^\$\.?/, '').replace(/^\./, '');
+  return bare ? `$[0].${bare}` : '$[0]';
+}
+
+/** Send objects as objects so Socket.IO delivers structured data, not a string. */
+function parseData(value: string): unknown {
+  const t = value.trim();
+  if (!t) return '';
+  if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+    try { return JSON.parse(t); } catch { return value; }
+  }
+  return value;
+}
+
+function buildWsFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
+  const flow: Array<Record<string, unknown>> = [];
+  for (const step of cfg.flow) {
+    if (step.kind === 'send' || step.kind === 'emit') {
       flow.push({ send: step.value });
     } else if (step.kind === 'think') {
       flow.push({ think: Number(step.value) || 1 });
-    } else if (step.kind === 'expect') {
+    } else if (step.kind === 'expect' || step.kind === 'listen') {
       // The ws engine reads match specs from inside the send step, beside
       // `payload`. Attaching a sibling key makes Artillery reject the scenario
       // with "must have 1 key" before the run starts.
@@ -215,14 +296,30 @@ function buildScript(cfg: SocketConfig, runId: string): Record<string, unknown> 
     }
   }
   if (flow.length === 0) flow.push({ think: 1 });
+  return flow;
+}
+
+function buildScript(cfg: SocketConfig, runId: string): Record<string, unknown> {
+  const flow = buildFlow(cfg);
+  const engineConfig = cfg.engine === 'socketio'
+    ? {
+        socketio: {
+          ...(cfg.transports.length ? { transports: cfg.transports } : {}),
+          ...(Object.keys(cfg.query).length ? { query: cfg.query } : {}),
+          ...(Object.keys(cfg.headers).length ? { extraHeaders: cfg.headers } : {}),
+        },
+      }
+    : {
+        ws: {
+          headers: cfg.headers,
+          ...(cfg.subprotocols.length ? { subprotocols: cfg.subprotocols } : {}),
+        },
+      };
 
   return {
     config: {
       target: cfg.url,
-      ws: {
-        headers: cfg.headers,
-        ...(cfg.subprotocols.length ? { subprotocols: cfg.subprotocols } : {}),
-      },
+      ...engineConfig,
       phases: cfg.phases.map((p) => ({
         name: p.name,
         duration: p.durationSec,
@@ -236,7 +333,7 @@ function buildScript(cfg: SocketConfig, runId: string): Record<string, unknown> 
         },
       },
     },
-    scenarios: [{ engine: 'ws', name: 'socket', flow }],
+    scenarios: [{ engine: cfg.engine, name: 'socket', flow }],
   };
 }
 

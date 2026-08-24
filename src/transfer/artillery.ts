@@ -2,6 +2,7 @@ import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
 import { DEFAULT_SOCKET } from '../shared/defaults.ts';
 import { parseThreshold } from '../metrics/thresholds.ts';
 import type { CheckSpec, RunConfig, SocketConfig, SocketFlowStep, ThresholdSpec } from '../shared/types.ts';
+import { buildFlow } from '../runners/artillery.runner.ts';
 import type { ImportResult } from './k6.ts';
 
 /**
@@ -16,24 +17,24 @@ import type { ImportResult } from './k6.ts';
 export function toArtilleryScript(config: RunConfig): string {
   const cfg = config.socket ?? DEFAULT_SOCKET;
 
-  const flow: Array<Record<string, unknown>> = [];
-  for (const step of cfg.flow) {
-    if (step.kind === 'send') flow.push({ send: step.value });
-    else if (step.kind === 'think') flow.push({ think: Number(step.value) || 1 });
-    else if (step.kind === 'expect') {
-      // The ws engine takes match specs *inside* the send step, next to
-      // `payload`. A sibling key fails validation with "must have 1 key".
-      const prev = flow[flow.length - 1];
-      const payload = prev && typeof prev.send === 'string' ? prev.send
-        : prev && isRecord(prev.send) ? (prev.send as Record<string, unknown>).payload
-        : undefined;
-      if (prev && payload !== undefined) {
-        prev.send = { payload, match: { regexp: escapeRegex(step.value) } };
+  // Same builder the runner uses, so an exported script cannot drift from what
+  // actually runs.
+  const flow = buildFlow(cfg);
+
+  const engineConfig = cfg.engine === 'socketio'
+    ? {
+        socketio: {
+          ...(cfg.transports.length ? { transports: cfg.transports } : {}),
+          ...(Object.keys(cfg.query).length ? { query: cfg.query } : {}),
+          ...(Object.keys(cfg.headers).length ? { extraHeaders: cfg.headers } : {}),
+        },
       }
-      // An expect with no preceding send has nothing to attach to; dropping it
-      // is correct — the engine has no standalone wait step.
-    }
-  }
+    : {
+        ws: {
+          ...(Object.keys(cfg.headers).length ? { headers: cfg.headers } : {}),
+          ...(cfg.subprotocols.length ? { subprotocols: cfg.subprotocols } : {}),
+        },
+      };
 
   const doc: Record<string, unknown> = {
     config: {
@@ -44,15 +45,14 @@ export function toArtilleryScript(config: RunConfig): string {
         arrivalRate: p.arrivalRate,
         ...(p.rampTo ? { rampTo: p.rampTo } : {}),
       })),
-      ws: {
-        ...(Object.keys(cfg.headers).length ? { headers: cfg.headers } : {}),
-        ...(cfg.subprotocols.length ? { subprotocols: cfg.subprotocols } : {}),
-      },
+      ...engineConfig,
     },
-    scenarios: [{ engine: 'ws', name: 'socket', flow: flow.length ? flow : [{ think: 1 }] }],
+    scenarios: [{ engine: cfg.engine, name: 'socket', flow }],
     // Ignored by Artillery; read back on import.
     dashboard: {
       protocol: 'socket',
+      engine: cfg.engine,
+      namespace: cfg.namespace,
       measureRoundTrip: cfg.measureRoundTrip,
       checks: config.checks,
       thresholds: config.thresholds.map((t) => t.expr),
@@ -120,9 +120,9 @@ export function fromArtilleryScript(source: string): ImportResult {
     warnings.push('no scenarios found — flow left at defaults');
   } else {
     const engine = str(scenario.engine);
-    if (engine && engine !== 'ws') {
-      warnings.push(`scenario engine "${engine}" is not ws — the WebSocket runner will still use the ws engine`);
-    }
+    if (engine === 'socketio' || engine === 'socket.io') socket.engine = 'socketio';
+    else if (engine === 'ws' || !engine) socket.engine = 'ws';
+    else warnings.push(`scenario engine "${engine}" is not supported — falling back to the ws engine`);
     if (scenarios && scenarios.length > 1) {
       warnings.push(`${scenarios.length} scenarios found — only the first is shown in the form`);
     }
@@ -132,7 +132,27 @@ export function fromArtilleryScript(source: string): ImportResult {
       for (const raw of flow) {
         const step = rec(raw);
         if (!step) continue;
-        if ('send' in step) {
+        if ('emit' in step) {
+          const emit = rec(step.emit);
+          const data = emit?.data;
+          steps.push({
+            kind: 'emit',
+            event: str(emit?.channel) ?? '',
+            value: typeof data === 'string' ? data : JSON.stringify(data ?? ''),
+            acknowledge: 'acknowledge' in step,
+            ...readMatch(rec(step.acknowledge)),
+            ...(str(step.namespace) ? { namespace: str(step.namespace)! } : {}),
+          });
+          const resp = rec(step.response);
+          if (resp) {
+            steps.push({
+              kind: 'listen',
+              event: str(resp.channel) ?? str(resp.on) ?? '',
+              value: '',
+              ...readMatch(resp),
+            });
+          }
+        } else if ('send' in step) {
           const sendObj = rec(step.send);
           const payload = sendObj ? sendObj.payload : step.send;
           const value = typeof payload === 'string' ? payload : JSON.stringify(payload ?? '');
@@ -151,8 +171,23 @@ export function fromArtilleryScript(source: string): ImportResult {
     }
   }
 
+  const socketioCfg = rec(config?.socketio);
+  if (socketioCfg) {
+    socket.engine = 'socketio';
+    const transports = arr(socketioCfg.transports);
+    if (transports) socket.transports = transports.filter((x): x is string => typeof x === 'string');
+    const query = strRecord(rec(socketioCfg.query));
+    if (query) socket.query = query;
+    const extra = strRecord(rec(socketioCfg.extraHeaders));
+    if (extra) socket.headers = extra;
+  }
+
   const meta = rec(doc.dashboard);
   if (meta) {
+    const engine = str(meta.engine);
+    if (engine === 'ws' || engine === 'socketio') socket.engine = engine;
+    const ns = str(meta.namespace);
+    if (ns !== null) socket.namespace = ns;
     const rtt = meta.measureRoundTrip;
     if (typeof rtt === 'boolean') socket.measureRoundTrip = rtt;
     checks = readChecks(arr(meta.checks), warnings);
@@ -187,6 +222,26 @@ export function fromArtilleryScript(source: string): ImportResult {
     config: { protocol: 'socket', socket, checks, thresholds, script: { mode: 'builtin', content: '', path: '', filename: '' } },
     warnings,
   };
+}
+
+/** Pull `match: { json, value }` back into the flat step fields the form uses. */
+function readMatch(spec: Record<string, unknown> | null): Partial<SocketFlowStep> {
+  const match = rec(spec?.match);
+  if (!match) return {};
+  const path = str(match.json) ?? str(match.jsonpath);
+  if (!path) return {};
+  return { matchPath: denormalizeJsonPath(path), matchValue: str(match.value) ?? '' };
+}
+
+/**
+ * Inverse of the runner's normalizeJsonPath: the YAML addresses the ack
+ * argument array, the form shows the path into the payload. Without this a
+ * round-trip rewrites what the user typed.
+ */
+function denormalizeJsonPath(path: string): string {
+  const p = path.trim();
+  if (p === '$[0]') return '$';
+  return p.startsWith('$[0].') ? `$.${p.slice('$[0].'.length)}` : p;
 }
 
 function readChecks(list: unknown[] | null, warnings: string[]): CheckSpec[] {

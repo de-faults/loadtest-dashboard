@@ -15,7 +15,8 @@
     "postinstall": "npm --prefix web install --no-audit --no-fund",
     "check:i18n": "node scripts/check-i18n.mjs",
     "target:http": "node tools/http-target.mjs",
-    "target:ws": "node tools/ws-echo-target.mjs"
+    "target:ws": "node tools/ws-echo-target.mjs",
+    "target:socketio": "node tools/socketio-target.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
@@ -31,7 +32,8 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "socket.io": "^4.8.1"
   },
   "allowScripts": {
     "esbuild@0.28.2": true,

@@ -25,9 +25,13 @@ export const DEFAULT_REST: RestConfig = {
 };
 
 export const DEFAULT_SOCKET: SocketConfig = {
+  engine: 'ws',
   url: 'ws://localhost:8080',
   headers: {},
   subprotocols: [],
+  namespace: '',
+  query: {},
+  transports: [],
   phases: [
     { name: 'warmup', durationSec: 10, arrivalRate: 5 },
     { name: 'ramp', durationSec: 30, arrivalRate: 5, rampTo: 50 },

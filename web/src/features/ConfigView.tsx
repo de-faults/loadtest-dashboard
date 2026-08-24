@@ -336,23 +336,59 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
 }) {
   const { t } = useTranslation();
   const set = <K extends keyof SocketConfig>(k: K, v: SocketConfig[K]): void => onChange({ ...value, [k]: v });
+  const isIo = value.engine === 'socketio';
 
   return (
     <>
       <div className="section-title">{t('config.general')}</div>
       <div className="field-row">
-        <TextField label={t('config.url')} value={value.url} onChange={(v) => set('url', v)} />
-        <TextField label={t('config.subprotocols')} value={value.subprotocols.join(',')}
-          onChange={(v) => set('subprotocols', v.split(',').map((s) => s.trim()).filter(Boolean))} />
+        <SelectField label={t('config.engine')} value={value.engine}
+          hint={t(`config.engineHint_${value.engine}`)}
+          options={[
+            { value: 'ws' as const, label: t('config.engineWs') },
+            { value: 'socketio' as const, label: t('config.engineSocketIo') },
+          ]}
+          onChange={(v) => set('engine', v)} />
+        <TextField label={t('config.url')} value={value.url}
+          placeholder={isIo ? 'http://localhost:3000' : 'ws://localhost:8080'}
+          onChange={(v) => set('url', v)} />
       </div>
+
+      {isIo ? (
+        <>
+          <div className="field-row">
+            <TextField label={t('config.namespace')} hint={t('config.namespaceHint')}
+              value={value.namespace} placeholder="/chat"
+              onChange={(v) => set('namespace', v)} />
+            <TextField label={t('config.transports')} hint={t('config.transportsHint')}
+              value={value.transports.join(',')}
+              placeholder="websocket,polling"
+              onChange={(v) => set('transports', v.split(',').map((x) => x.trim()).filter(Boolean))} />
+          </div>
+          <KeyValueEditor
+            label={t('config.query')} hint={t('config.queryHint')}
+            value={value.query} onChange={(v) => set('query', v)}
+            addLabel={t('common.add')} removeLabel={t('common.remove')}
+            keyLabel={t('common.key')} valueLabel={t('common.value')}
+          />
+        </>
+      ) : (
+        <div className="field-row">
+          <TextField label={t('config.subprotocols')} value={value.subprotocols.join(',')}
+            onChange={(v) => set('subprotocols', v.split(',').map((s) => s.trim()).filter(Boolean))} />
+        </div>
+      )}
+
       <KeyValueEditor
         label={t('config.headers')} value={value.headers} onChange={(v) => set('headers', v)}
         suggestions={headerHints} valueSuggestions={headerValueHints}
         addLabel={t('common.add')} removeLabel={t('common.remove')}
         keyLabel={t('common.key')} valueLabel={t('common.value')}
       />
-      <CheckField label={t('config.measureRtt')} value={value.measureRoundTrip}
-        onChange={(v) => set('measureRoundTrip', v)} />
+      {!isIo ? (
+        <CheckField label={t('config.measureRtt')} value={value.measureRoundTrip}
+          onChange={(v) => set('measureRoundTrip', v)} />
+      ) : null}
 
       <div className="section-title">{t('config.phases')}</div>
       {value.phases.map((p, i) => {
@@ -383,32 +419,110 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
       </button>
 
       <div className="section-title">{t('config.flow')}</div>
-      {value.flow.map((s, i) => {
+      {value.flow.map((step, i) => {
         const patch = (next: Partial<SocketFlowStep>): void => {
           const flow = [...value.flow];
-          flow[i] = { ...s, ...next };
+          flow[i] = { ...step, ...next };
           set('flow', flow);
         };
+        const move = (delta: number): void => {
+          const j = i + delta;
+          if (j < 0 || j >= value.flow.length) return;
+          const flow = [...value.flow];
+          [flow[i], flow[j]] = [flow[j], flow[i]];
+          set('flow', flow);
+        };
+        const kinds = isIo
+          ? (['emit', 'listen', 'think'] as const)
+          : (['send', 'expect', 'think'] as const);
+        const isMessage = step.kind === 'emit' || step.kind === 'send';
+
         return (
-          <div key={i} className="flow-row">
-            <select value={s.kind} onChange={(e) => patch({ kind: e.target.value as SocketFlowStep['kind'] })}>
-              <option value="send">send</option>
-              <option value="think">think</option>
-              <option value="expect">expect</option>
-            </select>
-            <input
-              value={s.value}
-              placeholder={s.kind === 'think' ? '1' : s.kind === 'expect' ? 'pong' : '{"type":"ping"}'}
-              onChange={(e) => patch({ value: e.target.value })}
-            />
-            <button className="btn btn-sm" title={t('common.remove')}
-              onClick={() => set('flow', value.flow.filter((_, j) => j !== i))}>✕</button>
+          <div key={i} className="step-item">
+            <div className="step-head">
+              <span className="step-index">{i + 1}</span>
+              <select
+                style={{ width: 'auto' }}
+                value={step.kind}
+                onChange={(e) => patch({ kind: e.target.value as SocketFlowStep['kind'] })}
+              >
+                {kinds.map((k) => <option key={k} value={k}>{t(`config.step_${k}`)}</option>)}
+              </select>
+
+              {isIo && step.kind !== 'think' ? (
+                <input
+                  className="step-event"
+                  value={step.event ?? ''}
+                  placeholder={t('config.eventName')}
+                  onChange={(e) => patch({ event: e.target.value })}
+                />
+              ) : null}
+
+              {isIo && step.kind === 'emit' ? (
+                <label className="step-ack" title={t('config.ackHint')}>
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    checked={step.acknowledge ?? false}
+                    onChange={(e) => patch({ acknowledge: e.target.checked })}
+                  />
+                  <span>{t('config.ack')}</span>
+                </label>
+              ) : null}
+
+              <span className="spacer" />
+              <button className="btn btn-sm" title={t('config.moveUp')} disabled={i === 0}
+                onClick={() => move(-1)}>↑</button>
+              <button className="btn btn-sm" title={t('config.moveDown')} disabled={i === value.flow.length - 1}
+                onClick={() => move(1)}>↓</button>
+              <button className="btn btn-sm" title={t('common.remove')}
+                onClick={() => set('flow', value.flow.filter((_, j) => j !== i))}>✕</button>
+            </div>
+
+            {step.kind === 'think' ? (
+              <input
+                type="number" min={0} step="0.1"
+                value={step.value}
+                placeholder="1"
+                onChange={(e) => patch({ value: e.target.value })}
+              />
+            ) : isMessage ? (
+              <textarea
+                className="step-body"
+                spellCheck={false}
+                value={step.value}
+                placeholder={isIo ? '{"room":"lobby"}' : '{"type":"ping"}'}
+                onChange={(e) => patch({ value: e.target.value })}
+              />
+            ) : !isIo ? (
+              <input
+                value={step.value}
+                placeholder="pong"
+                onChange={(e) => patch({ value: e.target.value })}
+              />
+            ) : null}
+
+            {/* Assertions apply to what comes back: an ack payload, or a
+                server-pushed event. */}
+            {isIo && (step.kind === 'listen' || (step.kind === 'emit' && step.acknowledge)) ? (
+              <div className="field-row" style={{ marginTop: 6 }}>
+                <TextField label={t('config.matchPath')} hint={t('config.matchPathHint')}
+                  value={step.matchPath ?? ''} placeholder="$.status"
+                  onChange={(v) => patch({ matchPath: v })} />
+                <TextField label={t('config.matchValue')}
+                  value={step.matchValue ?? ''} placeholder="ok"
+                  onChange={(v) => patch({ matchValue: v })} />
+              </div>
+            ) : null}
           </div>
         );
       })}
-      <button className="btn btn-sm" onClick={() => set('flow', [...value.flow, { kind: 'send', value: '' }])}>
-        + {t('common.add')}
-      </button>
+      <button
+        className="btn btn-sm"
+        onClick={() => set('flow', [...value.flow, isIo
+          ? { kind: 'emit', value: '', event: '', acknowledge: false }
+          : { kind: 'send', value: '' }])}
+      >+ {t('common.add')}</button>
     </>
   );
 }
