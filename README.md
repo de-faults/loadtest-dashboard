@@ -83,9 +83,12 @@ real number.
   `expected_response`). k6's `handleSummary` output is authoritative for its own
   thresholds, and its exit code (99 = threshold breach) can independently fail the run.
 - **WebSocket / Socket.IO** — two engines. Raw `ws` sends plain frames. Socket.IO
-  sends named events, optionally waits for the server's acknowledgement callback,
-  and can wait on a server-pushed event; assertions are a JSON path plus expected
-  value. With acknowledgements the run reports a genuine emit→ack round trip
+  sends named events and optionally waits for the server's acknowledgement
+  callback; assertions are a JSON path plus expected value. Waiting on a
+  server-pushed event is deliberately not offered: the engine records a flat ~10s
+  for every such step whether or not the event arrives, and it cannot be combined
+  with an acknowledgement, so it would corrupt the latency distribution. An
+  imported script using one is reported as a warning. With acknowledgements the run reports a genuine emit→ack round trip
   (`socketio.response_time`); without one, latency falls back to
   `vusers.session_length` — whole-scenario duration, think time included — and the
   two are never mixed into the same distribution. Artillery only writes `--output` at the end, so live charts come from

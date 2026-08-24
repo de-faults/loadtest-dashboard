@@ -31,14 +31,16 @@ export const restSchema = z.object({
 });
 
 export const socketSchema = z.object({
-  engine: z.enum(['ws', 'socketio']),
+  // Defaulted, not required: socket profiles saved before the Socket.IO engine
+  // existed carry none of these fields and must keep loading.
+  engine: z.enum(['ws', 'socketio']).default('ws'),
   // Socket.IO is reached over http(s); raw WebSocket over ws(s).
   url: z.string().regex(/^(wss?|https?):\/\//, 'must start with ws://, wss://, http:// or https://'),
   headers: kv,
   subprotocols: z.array(z.string()),
-  namespace: z.string().max(200),
-  query: kv,
-  transports: z.array(z.string()),
+  namespace: z.string().max(200).default(''),
+  query: kv.default({}),
+  transports: z.array(z.string()).default([]),
   phases: z.array(z.object({
     name: z.string(),
     durationSec: z.number().int().min(1),

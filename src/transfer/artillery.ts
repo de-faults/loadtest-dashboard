@@ -145,12 +145,11 @@ export function fromArtilleryScript(source: string): ImportResult {
           });
           const resp = rec(step.response);
           if (resp) {
-            steps.push({
-              kind: 'listen',
-              event: str(resp.channel) ?? str(resp.on) ?? '',
-              value: '',
-              ...readMatch(resp),
-            });
+            const channel = str(resp.channel) ?? str(resp.on) ?? '?';
+            warnings.push(
+              `waiting on server event "${channel}" is not supported: the engine reports a flat ~10s `
+              + 'response time regardless of arrival, and it cannot be combined with an acknowledgement — dropped',
+            );
           }
         } else if ('send' in step) {
           const sendObj = rec(step.send);
@@ -216,6 +215,12 @@ export function fromArtilleryScript(source: string): ImportResult {
         warnings.push(`ensure.${key} has no DSL equivalent — dropped`);
       }
     }
+  }
+
+  // The exporter stamps the connection namespace onto every step; reading it
+  // back as a per-step override would rewrite the flow on every round trip.
+  for (const step of socket.flow) {
+    if (step.namespace && step.namespace === socket.namespace) delete step.namespace;
   }
 
   return {

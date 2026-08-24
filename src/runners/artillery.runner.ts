@@ -224,15 +224,12 @@ function buildSocketIoFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
       continue;
     }
     if (step.kind === 'listen') {
-      // A listen with no preceding emit has nothing to attach to: the engine
-      // only reads `response` alongside an `emit`.
-      const prev = flow[flow.length - 1];
-      if (prev && 'emit' in prev) {
-        prev.response = {
-          channel: step.event ?? '',
-          ...matchSpec(step),
-        };
-      }
+      // Deliberately dropped. Artillery's socketio engine records a flat ~10s
+      // for every `response` step whether or not the event arrives — verified
+      // against a server that replies in ~15ms — so keeping it would poison the
+      // latency distribution. It also cannot coexist with `acknowledge`, which
+      // fails every iteration with "Failed match". Acknowledgements give a real
+      // round trip, so that is the supported path.
       continue;
     }
     // 'emit' — and 'send' too, so switching engines keeps existing steps usable.

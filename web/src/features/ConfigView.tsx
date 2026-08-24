@@ -337,6 +337,8 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
   const { t } = useTranslation();
   const set = <K extends keyof SocketConfig>(k: K, v: SocketConfig[K]): void => onChange({ ...value, [k]: v });
   const isIo = value.engine === 'socketio';
+  const engineValue = value.engine ?? 'ws';
+  void engineValue;
 
   return (
     <>
@@ -348,7 +350,7 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
             { value: 'ws' as const, label: t('config.engineWs') },
             { value: 'socketio' as const, label: t('config.engineSocketIo') },
           ]}
-          onChange={(v) => set('engine', v)} />
+          onChange={(engine) => onChange({ ...value, engine, flow: migrateFlow(value.flow, engine) })} />
         <TextField label={t('config.url')} value={value.url}
           placeholder={isIo ? 'http://localhost:3000' : 'ws://localhost:8080'}
           onChange={(v) => set('url', v)} />
@@ -432,10 +434,14 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
           [flow[i], flow[j]] = [flow[j], flow[i]];
           set('flow', flow);
         };
-        const kinds = isIo
-          ? (['emit', 'listen', 'think'] as const)
-          : (['send', 'expect', 'think'] as const);
+        const engineKinds: SocketFlowStep['kind'][] = isIo
+          ? ['emit', 'think']
+          : ['send', 'expect', 'think'];
+        // Keep an unmigrated kind visible rather than silently showing the wrong
+        // option as selected.
+        const kinds = engineKinds.includes(step.kind) ? engineKinds : [step.kind, ...engineKinds];
         const isMessage = step.kind === 'emit' || step.kind === 'send';
+        const canAck = isIo && isMessage;
 
         return (
           <div key={i} className="step-item">
@@ -458,7 +464,7 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
                 />
               ) : null}
 
-              {isIo && step.kind === 'emit' ? (
+              {canAck ? (
                 <label className="step-ack" title={t('config.ackHint')}>
                   <input
                     type="checkbox"
@@ -504,7 +510,7 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
 
             {/* Assertions apply to what comes back: an ack payload, or a
                 server-pushed event. */}
-            {isIo && (step.kind === 'listen' || (step.kind === 'emit' && step.acknowledge)) ? (
+            {isIo && isMessage && step.acknowledge ? (
               <div className="field-row" style={{ marginTop: 6 }}>
                 <TextField label={t('config.matchPath')} hint={t('config.matchPathHint')}
                   value={step.matchPath ?? ''} placeholder="$.status"
@@ -525,6 +531,29 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
       >+ {t('common.add')}</button>
     </>
   );
+}
+
+/**
+ * Switching engine rewrites step kinds to the target engine's vocabulary.
+ * Without this, steps stay as `send` in Socket.IO mode, where the event name and
+ * acknowledgement controls only render for `emit` — so the feature looks absent.
+ */
+function migrateFlow(flow: SocketFlowStep[], engine: 'ws' | 'socketio'): SocketFlowStep[] {
+  return flow.map((step) => {
+    if (step.kind === 'think') return step;
+    if (engine === 'socketio') {
+      // `expect` becomes an acknowledgement assertion — the engine has no
+      // usable standalone wait-for-event step.
+      if (step.kind === 'send') return { ...step, kind: 'emit', event: step.event || 'message' };
+      if (step.kind === 'expect') {
+        return { ...step, kind: 'emit', event: step.event || 'message', acknowledge: true, value: '' };
+      }
+      return step;
+    }
+    if (step.kind === 'emit') return { ...step, kind: 'send' };
+    if (step.kind === 'listen') return { ...step, kind: 'expect' };
+    return step;
+  });
 }
 
 // ─── Kafka ───────────────────────────────────────────────────────────────────
