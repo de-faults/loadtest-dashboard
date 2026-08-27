@@ -132,3 +132,13 @@ export const settingsSchema = z.object({
   retentionRuns: z.number().int().min(1).max(10_000).optional(),
   kafkaMonitorIntervalSec: z.number().int().min(1).max(300).optional(),
 });
+
+export const kafkaAuthSchema = z.object({
+  securityProtocol: z.enum(['PLAINTEXT', 'SSL', 'SASL_PLAINTEXT', 'SASL_SSL']),
+  saslMechanism: z.enum(['PLAIN', 'SCRAM-SHA-256', 'SCRAM-SHA-512', 'GSSAPI', 'OAUTHBEARER']),
+  username: z.string().max(500),
+  password: z.string().max(2000),
+  sslCaLocation: z.string().max(4096),
+  sslSkipVerify: z.boolean(),
+  extra: z.record(z.string(), z.string()),
+});

@@ -5,7 +5,7 @@
   },
   "nav": {
     "run": "รันทดสอบ",
-    "config": "ตั้งค่า",
+    "config": "โปรไฟล์ทดสอบ",
     "history": "ประวัติ",
     "kafka": "มอนิเตอร์ Kafka",
     "settings": "การตั้งค่าระบบ",
@@ -44,7 +44,7 @@
     "protocol": "โปรโตคอล",
     "target": "เป้าหมาย",
     "actions": "การกระทำ",
-    "newProfile": "โปรไฟล์ใหม่",
+    "newProfile": "สร้างโปรไฟล์ทดสอบ",
     "confirmDelete": "ต้องการลบถาวรหรือไม่?",
     "clear": "ล้าง"
   },
@@ -109,11 +109,19 @@
       "error": "ผิดพลาด",
       "stopped": "หยุดแล้ว",
       "queued": "รอคิว"
-    }
+    },
+    "selectProfiles": "โปรไฟล์ที่จะรัน",
+    "queue": "คิว",
+    "queued": "รออยู่ {{count}} รายการ",
+    "clearQueue": "ล้างคิว",
+    "runsSequentially": "รันทีละโปรไฟล์ตามลำดับ — รันพร้อมกันจะทำให้ตัวเลขของกันและกันเพี้ยน",
+    "selectAll": "เลือกทั้งหมด",
+    "selectNone": "ยกเลิกที่เลือก",
+    "nSelected": "เลือกแล้ว {{count}} รายการ"
   },
   "config": {
-    "title": "ตั้งค่า",
-    "profiles": "โปรไฟล์",
+    "title": "โปรไฟล์ทดสอบ",
+    "profiles": "โปรไฟล์ที่บันทึกไว้",
     "general": "ทั่วไป",
     "load": "รูปแบบโหลด",
     "request": "คำขอ",
@@ -247,7 +255,18 @@
     },
     "noGroups": "ยังไม่มีคอนซูมเมอร์กรุ๊ปที่ commit offset บนทอปิกเหล่านี้ จึงยังไม่มีค่าความล่าช้าให้แสดง",
     "noLagYet": "กำลังเก็บข้อมูล — กราฟต้องมีอย่างน้อย 2 จุด",
-    "noGroupMatch": "ไม่มีคอนซูมเมอร์กรุ๊ปที่ตรงกับตัวกรอง"
+    "noGroupMatch": "ไม่มีคอนซูมเมอร์กรุ๊ปที่ตรงกับตัวกรอง",
+    "auth": "การยืนยันตัวตนกับโบรกเกอร์",
+    "securityProtocol": "Security protocol",
+    "saslMechanism": "SASL mechanism",
+    "username": "ชื่อผู้ใช้",
+    "password": "รหัสผ่าน",
+    "passwordKept": "บันทึกไว้แล้ว — เว้นว่างถ้าใช้ค่าเดิม",
+    "caLocation": "พาธไฟล์ CA certificate",
+    "skipVerify": "ข้ามการตรวจสอบ certificate",
+    "skipVerifyHint": "ปิดการตรวจ certificate ของโบรกเกอร์ ใช้กับคลัสเตอร์ทดสอบเท่านั้น",
+    "extraProps": "คุณสมบัติ librdkafka เพิ่มเติม",
+    "authHint": "โบรกเกอร์ในเครื่องที่ไม่มี auth ให้ปล่อยเป็น PLAINTEXT"
   },
   "settings": {
     "title": "การตั้งค่าระบบ",

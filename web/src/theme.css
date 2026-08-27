@@ -413,6 +413,20 @@ pre.logs { white-space: pre; }
 }
 
 /* Socket flow step: a card per step, header row + body, like a request builder. */
+.profile-pick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  gap: 6px;
+}
+.pick-item {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 8px; cursor: pointer; background: var(--panel-alt);
+}
+.pick-item.on { border-color: var(--accent); background: var(--accent-soft); }
+.pick-item .checkbox { width: auto; flex-shrink: 0; }
+.pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .step-item {
   border: 1px solid var(--border); border-radius: 4px;
   background: var(--panel-alt);
@@ -448,6 +462,20 @@ pre.logs { white-space: pre; }
 }
 @media (max-width: 560px) {
   /* Socket flow step: a card per step, header row + body, like a request builder. */
+.profile-pick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  gap: 6px;
+}
+.pick-item {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 8px; cursor: pointer; background: var(--panel-alt);
+}
+.pick-item.on { border-color: var(--accent); background: var(--accent-soft); }
+.pick-item .checkbox { width: auto; flex-shrink: 0; }
+.pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .step-item {
   border: 1px solid var(--border); border-radius: 4px;
   background: var(--panel-alt);

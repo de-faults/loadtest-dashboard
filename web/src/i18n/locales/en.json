@@ -5,7 +5,7 @@
   },
   "nav": {
     "run": "Run",
-    "config": "Configuration",
+    "config": "Test profiles",
     "history": "History",
     "kafka": "Kafka Monitor",
     "settings": "Settings",
@@ -44,7 +44,7 @@
     "protocol": "Protocol",
     "target": "Target",
     "actions": "Actions",
-    "newProfile": "New profile",
+    "newProfile": "New test profile",
     "confirmDelete": "Delete this permanently?",
     "clear": "Clear"
   },
@@ -109,11 +109,19 @@
       "error": "Error",
       "stopped": "Stopped",
       "queued": "Queued"
-    }
+    },
+    "selectProfiles": "Profiles to run",
+    "queue": "Queue",
+    "queued": "{{count}} queued",
+    "clearQueue": "Clear queue",
+    "runsSequentially": "Profiles run one after another — concurrent runs skew each other\\u2019s numbers.",
+    "selectAll": "Select all",
+    "selectNone": "Clear selection",
+    "nSelected": "{{count}} selected"
   },
   "config": {
-    "title": "Configuration",
-    "profiles": "Profiles",
+    "title": "Test profiles",
+    "profiles": "Saved profiles",
     "general": "General",
     "load": "Load model",
     "request": "Request",
@@ -247,7 +255,18 @@
     },
     "noGroups": "No consumer group has committed offsets on these topics — there is no lag to report yet.",
     "noLagYet": "Collecting — the lag graph needs at least two samples.",
-    "noGroupMatch": "No consumer group matches the current filter."
+    "noGroupMatch": "No consumer group matches the current filter.",
+    "auth": "Broker authentication",
+    "securityProtocol": "Security protocol",
+    "saslMechanism": "SASL mechanism",
+    "username": "Username",
+    "password": "Password",
+    "passwordKept": "stored — leave blank to keep",
+    "caLocation": "CA certificate path",
+    "skipVerify": "Skip certificate verification",
+    "skipVerifyHint": "Disables broker certificate checks. Use only against a test cluster.",
+    "extraProps": "Extra librdkafka properties",
+    "authHint": "Leave as PLAINTEXT for a local broker with no auth."
   },
   "settings": {
     "title": "Settings",

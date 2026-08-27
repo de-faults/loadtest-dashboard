@@ -194,6 +194,11 @@ are not clipped. `npm run check:i18n` fails the build on key drift between local
 - Child processes are killed on stop and on SIGINT/SIGTERM — orphaned k6 processes
   would keep hammering the target.
 - Concurrent runs are capped at 1 by default; parallel runs skew each other's numbers.
+  Selecting several profiles queues them and runs them one after another rather
+  than raising that cap.
+- The Kafka monitor's SASL password is held in memory for the running monitor
+  only. It is never returned by the API (status reports `hasPassword` instead),
+  never written to the database, and never logged.
 
 ## Layout
 
@@ -206,7 +211,7 @@ src/
   export/csv.ts         CSV report generation
   api/                  routes + zod validation
 web/src/
-  features/             run, config, history, kafka monitor, settings
+  features/             run, test profiles, history, kafka monitor, settings
   components/           panel, stat, uPlot time series, form fields
   i18n/                 en + th locales
 ```

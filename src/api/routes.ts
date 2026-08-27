@@ -7,16 +7,18 @@ import {
   defaultConfig, HTTP_HEADER_HINTS, HTTP_HEADER_VALUE_HINTS, LIBRDKAFKA_HINTS,
 } from '../shared/defaults.ts';
 import { METRICS } from '../metrics/thresholds.ts';
-import { activeRuns, availability, startRun, stopRun, targetOf } from '../runners/manager.ts';
+import {
+  activeRuns, availability, clearQueue, dequeue, queuedRuns, startBatch, startRun, stopRun, targetOf,
+} from '../runners/manager.ts';
 import { ingestArtilleryReport } from '../runners/artillery.runner.ts';
 import { monitorStatus, startMonitor, stopMonitor } from '../kafka/monitor.ts';
 import { exampleScript } from '../runners/script.ts';
 import {
   detectProtocol, exportScript, importScript, SCRIPT_FILENAME, SCRIPT_MIME,
 } from '../transfer/index.ts';
-import { profileSchema, runConfigSchema, settingsSchema } from './schema.ts';
+import { kafkaAuthSchema, profileSchema, runConfigSchema, settingsSchema } from './schema.ts';
 import { TOKEN } from '../config.ts';
-import type { Profile, Protocol, RunConfig, RunEvent } from '../shared/types.ts';
+import type { KafkaAuth, Profile, Protocol, RunConfig, RunEvent } from '../shared/types.ts';
 
 export function registerRoutes(app: FastifyInstance): void {
   // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -153,32 +155,63 @@ export function registerRoutes(app: FastifyInstance): void {
 
   // ─── Runs ─────────────────────────────────────────────────────────────────
   app.post('/api/runs', async (req, reply) => {
-    const body = req.body as { profileId?: string; profileName?: string; config?: unknown };
-    let config = body.config;
-    let profileName = body.profileName ?? 'ad-hoc';
-    let profileId: string | null = null;
+    const body = req.body as {
+      profileId?: string; profileIds?: string[]; profileName?: string; config?: unknown;
+    };
 
-    if (body.profileId) {
-      const p = store.getProfile(body.profileId);
-      if (!p) return reply.code(404).send({ error: 'profile not found' });
-      config = p.config;
-      profileName = p.name;
-      profileId = p.id;
+    // One profile, several profiles, or an ad-hoc config. Several profiles run
+    // in sequence — see startBatch.
+    const ids = body.profileIds?.length ? body.profileIds : body.profileId ? [body.profileId] : [];
+    const entries: Array<{ config: RunConfig; profileId: string | null; profileName: string }> = [];
+
+    if (ids.length) {
+      for (const id of ids) {
+        const p = store.getProfile(id);
+        if (!p) return reply.code(404).send({ error: `profile not found: ${id}` });
+        const parsed = runConfigSchema.safeParse(p.config);
+        if (!parsed.success) {
+          return reply.code(400).send({ error: `profile "${p.name}" is invalid`, issues: parsed.error.issues });
+        }
+        entries.push({ config: parsed.data as unknown as RunConfig, profileId: p.id, profileName: p.name });
+      }
+    } else {
+      const parsed = runConfigSchema.safeParse(body.config);
+      if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues });
+      entries.push({
+        config: parsed.data as unknown as RunConfig,
+        profileId: null,
+        profileName: body.profileName ?? 'ad-hoc',
+      });
     }
 
-    const parsed = runConfigSchema.safeParse(config);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues });
-
+    // Check every runner up front: queueing a batch that cannot finish is worse
+    // than refusing it.
     const avail = await availability();
-    const cap = avail[parsed.data.protocol];
-    if (!cap.available) return reply.code(409).send({ error: `runner unavailable: ${cap.detail}` });
+    for (const e of entries) {
+      const cap = avail[e.config.protocol];
+      if (!cap.available) {
+        return reply.code(409).send({ error: `runner unavailable for "${e.profileName}": ${cap.detail}` });
+      }
+    }
 
     try {
-      const runId = startRun({ config: parsed.data as never, profileId, profileName });
-      return { runId, target: targetOf(parsed.data as never) };
+      if (entries.length === 1) {
+        const only = entries[0];
+        const runId = startRun(only);
+        return { runId, target: targetOf(only.config), queued: [] };
+      }
+      const res = startBatch(entries);
+      return { runId: res.runId, target: entries[0] ? targetOf(entries[0].config) : '', queued: res.queued };
     } catch (err) {
       return reply.code(409).send({ error: (err as Error).message });
     }
+  });
+
+  app.get('/api/runs/queue', async () => queuedRuns());
+  app.delete('/api/runs/queue', async () => ({ removed: clearQueue() }));
+  app.delete('/api/runs/queue/:queueId', async (req, reply) => {
+    const ok = dequeue((req.params as { queueId: string }).queueId);
+    return ok ? { ok: true } : reply.code(404).send({ error: 'not queued' });
   });
 
   app.get('/api/runs/active', async () => activeRuns());
@@ -246,10 +279,17 @@ export function registerRoutes(app: FastifyInstance): void {
   // ─── Kafka monitor ────────────────────────────────────────────────────────
   app.get('/api/kafka/monitor', async () => monitorStatus());
   app.post('/api/kafka/monitor/start', async (req, reply) => {
-    const body = req.body as { bootstrapServers?: string; intervalSec?: number };
+    const body = req.body as { bootstrapServers?: string; intervalSec?: number; auth?: unknown };
     if (!body?.bootstrapServers) return reply.code(400).send({ error: 'bootstrapServers required' });
     const interval = Math.min(Math.max(body.intervalSec ?? store.getSettings().kafkaMonitorIntervalSec, 1), 300);
-    startMonitor(body.bootstrapServers, interval);
+
+    let auth = null;
+    if (body.auth) {
+      const parsed = kafkaAuthSchema.safeParse(body.auth);
+      if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues });
+      auth = parsed.data as KafkaAuth;
+    }
+    startMonitor(body.bootstrapServers, interval, auth);
     return monitorStatus();
   });
   app.post('/api/kafka/monitor/stop', async () => { stopMonitor(); return monitorStatus(); });

@@ -1,7 +1,14 @@
 import type {
-  AppSettings, Profile, Protocol, RunConfig, RunRow, RunSummary,
+  AppSettings, KafkaAuth, Profile, Protocol, RunConfig, RunRow, RunSummary,
   RunnerAvailability, WindowMetrics,
 } from '@shared/types.ts';
+
+export interface MonitorStatus {
+  running: boolean;
+  bootstrapServers: string | null;
+  intervalSec: number;
+  auth: (Omit<KafkaAuth, 'password'> & { hasPassword: boolean }) | null;
+}
 
 const TOKEN_KEY = 'ltd.token';
 
@@ -85,17 +92,21 @@ export const api = {
   runs: () => req<RunRow[]>('/api/runs'),
   activeRuns: () => req<Array<{ runId: string; protocol: Protocol; profileName: string; startedAt: number }>>('/api/runs/active'),
   run: (id: string) => req<RunDetail>(`/api/runs/${id}`),
-  startRun: (body: { profileId?: string; profileName?: string; config?: RunConfig }) =>
-    req<{ runId: string; target: string }>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
+  startRun: (body: { profileId?: string; profileIds?: string[]; profileName?: string; config?: RunConfig }) =>
+    req<{ runId: string | null; target: string; queued: Array<{ queueId: string; profileName: string }> }>(
+      '/api/runs', { method: 'POST', body: JSON.stringify(body) }),
+  queue: () => req<Array<{ queueId: string; profileName: string; protocol: Protocol }>>('/api/runs/queue'),
+  clearQueue: () => req<{ removed: number }>('/api/runs/queue', { method: 'DELETE' }),
+  dequeue: (queueId: string) => req<{ ok: true }>(`/api/runs/queue/${queueId}`, { method: 'DELETE' }),
   stopRun: (id: string) => req<{ ok: true }>(`/api/runs/${id}/stop`, { method: 'POST' }),
   deleteRun: (id: string) => req<{ ok: true }>(`/api/runs/${id}`, { method: 'DELETE' }),
 
-  kafkaMonitor: () => req<{ running: boolean; bootstrapServers: string | null; intervalSec: number }>('/api/kafka/monitor'),
-  startKafkaMonitor: (bootstrapServers: string, intervalSec: number) =>
-    req<{ running: boolean }>('/api/kafka/monitor/start', {
-      method: 'POST', body: JSON.stringify({ bootstrapServers, intervalSec }),
+  kafkaMonitor: () => req<MonitorStatus>('/api/kafka/monitor'),
+  startKafkaMonitor: (bootstrapServers: string, intervalSec: number, auth: KafkaAuth | null) =>
+    req<MonitorStatus>('/api/kafka/monitor/start', {
+      method: 'POST', body: JSON.stringify({ bootstrapServers, intervalSec, auth }),
     }),
-  stopKafkaMonitor: () => req<{ running: boolean }>('/api/kafka/monitor/stop', { method: 'POST' }),
+  stopKafkaMonitor: () => req<MonitorStatus>('/api/kafka/monitor/stop', { method: 'POST' }),
 };
 
 /** Browser downloads must carry the token too, so build the URL with it. */

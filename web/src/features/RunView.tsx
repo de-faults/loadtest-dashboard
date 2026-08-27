@@ -17,7 +17,8 @@ export function RunView(props: {
   onError: (msg: string) => void;
 }) {
   const { t } = useTranslation();
-  const [selectedProfile, setSelectedProfile] = useState<string>('');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [queue, setQueue] = useState<Array<{ queueId: string; profileName: string }>>([]);
   const [samples, setSamples] = useState<WindowMetrics[]>([]);
   const [logs, setLogs] = useState<Array<{ ts: number; level: string; line: string }>>([]);
   const [summary, setSummary] = useState<RunSummary | null>(null);
@@ -30,8 +31,12 @@ export function RunView(props: {
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!selectedProfile && props.profiles.length) setSelectedProfile(props.profiles[0].id);
-  }, [props.profiles, selectedProfile]);
+    if (selected.length === 0 && props.profiles.length) setSelected([props.profiles[0].id]);
+  }, [props.profiles]);
+
+  useEffect(() => {
+    api.queue().then(setQueue).catch(() => setQueue([]));
+  }, []);
 
   // Load persisted state whenever the selected run changes (history click or refresh).
   useEffect(() => {
@@ -75,6 +80,9 @@ export function RunView(props: {
       case 'log':
         setLogs((prev) => [...prev, { ts: ev.ts, level: ev.level, line: ev.line }].slice(-MAX_LOGS));
         break;
+      case 'queue':
+        setQueue(ev.pending);
+        break;
       case 'end':
         setSummary(ev.summary);
         setState(ev.state);
@@ -97,15 +105,21 @@ export function RunView(props: {
   }, [logs.length]);
 
   const start = async (): Promise<void> => {
+    if (selected.length === 0) return;
     setStarting(true);
     try {
-      const res = await api.startRun({ profileId: selectedProfile });
-      props.setRunId(res.runId);
+      const res = await api.startRun({ profileIds: selected });
+      setQueue(res.queued);
+      if (res.runId) props.setRunId(res.runId);
     } catch (e) {
       props.onError(`${t('errors.runFailed')}: ${(e as Error).message}`);
     } finally {
       setStarting(false);
     }
+  };
+
+  const toggleProfile = (id: string): void => {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const stop = async (): Promise<void> => {
@@ -155,7 +169,6 @@ export function RunView(props: {
   // A Kafka run that asked for lag but produced none is a fact worth showing.
   // Hiding the panel made it look like the feature was missing.
   const wantsLag = isKafka && detail?.config.kafka?.monitorLag === true;
-  const profile = props.profiles.find((p) => p.id === selectedProfile);
 
   return (
     <>
@@ -164,18 +177,10 @@ export function RunView(props: {
           <section className="panel">
             <div className="panel-body ctl-bar">
               <span className={`dot ${conn === 'live' ? 'live' : conn === 'down' ? 'dead' : ''}`} />
-              <select
-                style={{ flex: '1 1 220px' }}
-                value={selectedProfile}
-                onChange={(e) => setSelectedProfile(e.target.value)}
-                disabled={isRunning}
-              >
-                {props.profiles.length === 0 ? <option value="">{t('common.empty')}</option> : null}
-                {props.profiles.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name} · {t(`protocol.${p.protocol}`)}</option>
-                ))}
-              </select>
-              {profile ? <span className="badge badge-info">{t(`protocol.${profile.protocol}`)}</span> : null}
+              <span className="badge badge-info">{t('run.nSelected', { count: selected.length })}</span>
+              {queue.length ? (
+                <span className="badge badge-warn">{t('run.queued', { count: queue.length })}</span>
+              ) : null}
               <span className="grow" />
               {state ? <Badge tone={stateTone(state)}>{t(`run.states.${state}`)}</Badge> : null}
               {isRunning ? (
@@ -183,7 +188,7 @@ export function RunView(props: {
               ) : (
                 <button
                   className="btn btn-primary"
-                  disabled={!selectedProfile || starting}
+                  disabled={selected.length === 0 || starting}
                   onClick={() => void start()}
                 >▶ {t('common.start')}</button>
               )}
@@ -195,6 +200,72 @@ export function RunView(props: {
             </div>
           </section>
         </div>
+      </div>
+
+      <div className="grid" style={{ marginBottom: 10 }}>
+        <div className={queue.length ? 'col-8' : 'col-12'}>
+          <Panel
+            title={t('run.selectProfiles')}
+            actions={
+              <>
+                <button className="btn btn-sm" disabled={isRunning}
+                  onClick={() => setSelected(props.profiles.map((p) => p.id))}>{t('run.selectAll')}</button>
+                <button className="btn btn-sm" disabled={isRunning || selected.length === 0}
+                  onClick={() => setSelected([])}>{t('run.selectNone')}</button>
+              </>
+            }
+          >
+            {props.profiles.length === 0 ? <Empty text={t('common.empty')} /> : (
+              <div className="profile-pick">
+                {props.profiles.map((p) => (
+                  <label key={p.id} className={`pick-item${selected.includes(p.id) ? ' on' : ''}`}>
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={selected.includes(p.id)}
+                      disabled={isRunning}
+                      onChange={() => toggleProfile(p.id)}
+                    />
+                    <span className="pick-name">{p.name}</span>
+                    <span className="badge badge-muted">{t(`protocol.${p.protocol}`)}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="field-hint" style={{ marginTop: 6 }}>{t('run.runsSequentially')}</div>
+          </Panel>
+        </div>
+
+        {queue.length ? (
+          <div className="col-4">
+            <Panel
+              title={t('run.queue')}
+              actions={
+                <button className="btn btn-sm" onClick={() => { void api.clearQueue().then(() => setQueue([])); }}>
+                  {t('run.clearQueue')}
+                </button>
+              }
+              flush
+            >
+              <div className="tbl-wrap">
+                <table>
+                  <tbody>
+                    {queue.map((q, i) => (
+                      <tr key={q.queueId}>
+                        <td style={{ width: 26 }} className="stat-sub">{i + 1}</td>
+                        <td>{q.profileName}</td>
+                        <td className="r">
+                          <button className="btn btn-sm" title={t('common.remove')}
+                            onClick={() => { void api.dequeue(q.queueId).then(() => setQueue((v) => v.filter((x) => x.queueId !== q.queueId))); }}>✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
+          </div>
+        ) : null}
       </div>
 
       {!props.runId ? <Empty text={t('run.noRun')} /> : null}

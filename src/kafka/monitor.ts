@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { bus } from '../bus.ts';
-import type { GroupInfo, GroupTopicLag, KafkaConfig, PartitionLag, TopicInfo } from '../shared/types.ts';
+import type { GroupInfo, GroupTopicLag, KafkaAuth, KafkaConfig, PartitionLag, TopicInfo } from '../shared/types.ts';
 
 const require = createRequire(import.meta.url);
 
@@ -125,13 +125,60 @@ export async function collectGroups(
 
 // ─── Continuous monitor ──────────────────────────────────────────────────────
 
-let current: { stop: () => void; bootstrapServers: string; intervalSec: number } | null = null;
+/**
+ * Translate the monitor's auth form into librdkafka properties.
+ * Only non-empty values are emitted so a PLAINTEXT broker is unaffected.
+ */
+export function authProps(auth?: KafkaAuth | null): Record<string, string> {
+  if (!auth) return {};
+  const out: Record<string, string> = {};
+  if (auth.securityProtocol) out['security.protocol'] = auth.securityProtocol;
+  const needsSasl = auth.securityProtocol === 'SASL_SSL' || auth.securityProtocol === 'SASL_PLAINTEXT';
+  if (needsSasl) {
+    if (auth.saslMechanism) out['sasl.mechanism'] = auth.saslMechanism;
+    if (auth.username) out['sasl.username'] = auth.username;
+    if (auth.password) out['sasl.password'] = auth.password;
+  }
+  if (auth.sslCaLocation) out['ssl.ca.location'] = auth.sslCaLocation;
+  if (auth.sslSkipVerify) out['enable.ssl.certificate.verification'] = 'false';
+  for (const [k, v] of Object.entries(auth.extra ?? {})) {
+    if (k.trim() && v !== '') out[k.trim()] = v;
+  }
+  return out;
+}
 
-export function monitorStatus(): { running: boolean; bootstrapServers: string | null; intervalSec: number } {
+let current: {
+  stop: () => void;
+  bootstrapServers: string;
+  intervalSec: number;
+  auth: KafkaAuth | null;
+} | null = null;
+
+export interface MonitorStatus {
+  running: boolean;
+  bootstrapServers: string | null;
+  intervalSec: number;
+  /** Password is deliberately omitted — the UI never needs it back. */
+  auth: (Omit<KafkaAuth, 'password'> & { hasPassword: boolean }) | null;
+}
+
+export function monitorStatus(): MonitorStatus {
+  const auth = current?.auth ?? null;
   return {
     running: current !== null,
     bootstrapServers: current?.bootstrapServers ?? null,
     intervalSec: current?.intervalSec ?? 0,
+    auth: auth
+      ? {
+          securityProtocol: auth.securityProtocol,
+          saslMechanism: auth.saslMechanism,
+          username: auth.username,
+          sslCaLocation: auth.sslCaLocation,
+          sslSkipVerify: auth.sslSkipVerify,
+          extra: auth.extra,
+          hasPassword: Boolean(auth.password),
+        }
+      : null,
   };
 }
 
@@ -140,15 +187,16 @@ export function stopMonitor(): void {
   current = null;
 }
 
-export function startMonitor(bootstrapServers: string, intervalSec: number): void {
+export function startMonitor(bootstrapServers: string, intervalSec: number, auth: KafkaAuth | null = null): void {
   stopMonitor();
+  const props = authProps(auth);
   const lagHistory = new Map<string, number[]>();
   let stopped = false;
   let admin: KafkaAdmin | null = null;
 
   const loop = async (): Promise<void> => {
     try {
-      admin = makeAdmin(bootstrapServers);
+      admin = makeAdmin(bootstrapServers, props);
       await admin.connect();
     } catch (err) {
       bus.publish({
@@ -202,7 +250,7 @@ export function startMonitor(bootstrapServers: string, intervalSec: number): voi
   };
 
   void loop();
-  current = { bootstrapServers, intervalSec, stop: () => { stopped = true; } };
+  current = { bootstrapServers, intervalSec, auth, stop: () => { stopped = true; } };
 }
 
 function emptyPayload(bootstrapServers: string, intervalSec: number, errors: string[]) {

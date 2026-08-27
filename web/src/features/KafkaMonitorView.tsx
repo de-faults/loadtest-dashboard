@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { KafkaMonitorPayload, RunEvent } from '@shared/types.ts';
-import { api } from '../lib/api.ts';
+import type { KafkaAuth, KafkaMonitorPayload, RunEvent } from '@shared/types.ts';
+import { api, type MonitorStatus } from '../lib/api.ts';
+import { CheckField, KeyValueEditor, SelectField, TextField } from '../components/Fields.tsx';
 import { useEventStream } from '../lib/sse.ts';
 import { compact, num } from '../lib/format.ts';
 import { Empty, Panel } from '../components/Panel.tsx';
@@ -13,7 +14,12 @@ const WINDOWS = [120, 900, 1800, 3600];
 export function KafkaMonitorView(props: { onError: (m: string) => void }) {
   const { t } = useTranslation();
   const [payload, setPayload] = useState<KafkaMonitorPayload | null>(null);
-  const [status, setStatus] = useState<{ running: boolean; bootstrapServers: string | null; intervalSec: number } | null>(null);
+  const [status, setStatus] = useState<MonitorStatus | null>(null);
+  const [showAuth, setShowAuth] = useState(false);
+  const [auth, setAuth] = useState<KafkaAuth>({
+    securityProtocol: 'PLAINTEXT', saslMechanism: 'PLAIN',
+    username: '', password: '', sslCaLocation: '', sslSkipVerify: false, extra: {},
+  });
   const [bootstrap, setBootstrap] = useState('localhost:9092');
   const [interval, setIntervalSec] = useState(3);
   const [windowSec, setWindowSec] = useState(120);
@@ -27,6 +33,12 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
       setStatus(s);
       if (s.bootstrapServers) setBootstrap(s.bootstrapServers);
       if (s.intervalSec) setIntervalSec(s.intervalSec);
+      // The password is never sent back; everything else is restored so the
+      // form reflects the monitor that is actually running.
+      if (s.auth) {
+        setAuth((prev) => ({ ...prev, ...s.auth!, password: '' }));
+        setShowAuth(s.auth.securityProtocol !== 'PLAINTEXT');
+      }
     }).catch(() => {});
   }, []);
 
@@ -34,6 +46,8 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
     if (ev.t === 'kafka-monitor') setPayload(ev.payload);
   }, []);
   const conn = useEventStream(null, onEvent);
+  const needsSasl = auth.securityProtocol === 'SASL_SSL' || auth.securityProtocol === 'SASL_PLAINTEXT';
+  const usesTls = auth.securityProtocol === 'SSL' || auth.securityProtocol === 'SASL_SSL';
 
   const topics = useMemo(
     () => (payload?.topics ?? []).filter((x) => !topicFilter || x.name === topicFilter),
@@ -64,11 +78,12 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
   async function toggleMonitor(): Promise<void> {
     try {
       if (status?.running) {
-        setStatus(await api.stopKafkaMonitor() as typeof status);
+        setStatus(await api.stopKafkaMonitor());
         setPayload(null);
       } else {
-        await api.startKafkaMonitor(bootstrap, interval);
-        setStatus(await api.kafkaMonitor());
+        const useAuth = auth.securityProtocol !== 'PLAINTEXT'
+          || auth.sslCaLocation !== '' || Object.keys(auth.extra).length > 0;
+        setStatus(await api.startKafkaMonitor(bootstrap, interval, useAuth ? auth : null));
       }
     } catch (e) { props.onError((e as Error).message); }
   }
@@ -95,7 +110,61 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
               <option value="">{t('kafka.allGroups')}</option>
               {(payload?.groups ?? []).map((g) => <option key={g.groupId} value={g.groupId}>{g.groupId}</option>)}
             </select>
+            <button className={`btn btn-sm ${showAuth ? 'active' : ''}`} onClick={() => setShowAuth((v) => !v)}>
+              🔒 {t('kafka.auth')}
+            </button>
           </div>
+
+          {showAuth ? (
+            <div className="panel-body" style={{ borderTop: '1px solid var(--border)' }}>
+              <div className="field-row">
+                <SelectField
+                  label={t('kafka.securityProtocol')} value={auth.securityProtocol}
+                  hint={t('kafka.authHint')}
+                  options={(['PLAINTEXT', 'SSL', 'SASL_PLAINTEXT', 'SASL_SSL'] as const).map((v) => ({ value: v, label: v }))}
+                  onChange={(v) => setAuth({ ...auth, securityProtocol: v })}
+                />
+                {needsSasl ? (
+                  <SelectField
+                    label={t('kafka.saslMechanism')} value={auth.saslMechanism}
+                    options={(['PLAIN', 'SCRAM-SHA-256', 'SCRAM-SHA-512', 'GSSAPI', 'OAUTHBEARER'] as const)
+                      .map((v) => ({ value: v, label: v }))}
+                    onChange={(v) => setAuth({ ...auth, saslMechanism: v })}
+                  />
+                ) : null}
+              </div>
+
+              {needsSasl ? (
+                <div className="field-row">
+                  <TextField label={t('kafka.username')} value={auth.username}
+                    onChange={(v) => setAuth({ ...auth, username: v })} />
+                  <TextField label={t('kafka.password')} type="password" value={auth.password}
+                    hint={status?.auth?.hasPassword && !auth.password ? t('kafka.passwordKept') : undefined}
+                    onChange={(v) => setAuth({ ...auth, password: v })} />
+                </div>
+              ) : null}
+
+              {usesTls ? (
+                <div className="field-row">
+                  <TextField label={t('kafka.caLocation')} value={auth.sslCaLocation}
+                    placeholder="/etc/ssl/certs/ca.pem"
+                    onChange={(v) => setAuth({ ...auth, sslCaLocation: v })} />
+                  <CheckField label={t('kafka.skipVerify')} value={auth.sslSkipVerify}
+                    onChange={(v) => setAuth({ ...auth, sslSkipVerify: v })} />
+                </div>
+              ) : null}
+              {usesTls && auth.sslSkipVerify ? (
+                <div className="script-warn">⚠ {t('kafka.skipVerifyHint')}</div>
+              ) : null}
+
+              <KeyValueEditor
+                label={t('kafka.extraProps')} value={auth.extra}
+                onChange={(v) => setAuth({ ...auth, extra: v })}
+                addLabel={t('common.add')} removeLabel={t('common.remove')}
+                keyLabel={t('common.key')} valueLabel={t('common.value')}
+              />
+            </div>
+          ) : null}
         </section>
       </div>
 

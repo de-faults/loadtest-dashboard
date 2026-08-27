@@ -89,7 +89,8 @@ export type RunEvent =
   | { t: 'error'; runId: string; ts: number; kind: string; message: string; count: number }
   | { t: 'log'; runId: string; ts: number; level: 'info' | 'warn' | 'error'; line: string }
   | { t: 'end'; runId: string; endedAt: number; state: RunState; summary: RunSummary }
-  | { t: 'kafka-monitor'; runId: string | null; payload: KafkaMonitorPayload };
+  | { t: 'kafka-monitor'; runId: string | null; payload: KafkaMonitorPayload }
+  | { t: 'queue'; runId: null; pending: Array<{ queueId: string; profileName: string; protocol: Protocol }> };
 
 // ─── Run configuration ───────────────────────────────────────────────────────
 
@@ -261,6 +262,23 @@ export interface PartitionLag { partition: number; latest: number; committed: nu
 export interface GroupTopicLag { topic: string; totalLag: number; partitions: PartitionLag[] }
 export interface GroupInfo { groupId: string; state: string; memberCount: number; topics: GroupTopicLag[]; totalLag: number }
 export interface TopicInfo { name: string; partitionCount: number; endOffsetSum: number }
+
+/**
+ * Broker authentication for the monitor. Values are passed through to
+ * librdkafka; the password never leaves the server in any status or event.
+ */
+export interface KafkaAuth {
+  securityProtocol: 'PLAINTEXT' | 'SSL' | 'SASL_PLAINTEXT' | 'SASL_SSL';
+  saslMechanism: 'PLAIN' | 'SCRAM-SHA-256' | 'SCRAM-SHA-512' | 'GSSAPI' | 'OAUTHBEARER';
+  username: string;
+  password: string;
+  /** CA bundle path for SSL / SASL_SSL. */
+  sslCaLocation: string;
+  /** Skip broker certificate hostname verification. */
+  sslSkipVerify: boolean;
+  /** Anything else librdkafka accepts. */
+  extra: Record<string, string>;
+}
 
 export interface KafkaMonitorPayload {
   timestamp: string;
