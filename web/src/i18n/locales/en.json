@@ -281,7 +281,11 @@
     "importPassword": "password taken from the document",
     "importFailed": "Import failed",
     "importEmpty": "Nothing to import.",
-    "importTooBig": "File too large (limit 200 KB)."
+    "importTooBig": "File too large (limit 200 KB).",
+    "clearAuth": "Clear",
+    "clearAuthHint": "Empty every authentication field and go back to PLAINTEXT.",
+    "cleared": "Authentication cleared.",
+    "clearedWhileRunning": "Authentication cleared — the running monitor keeps its current settings until you stop and start it."
   },
   "settings": {
     "title": "Settings",

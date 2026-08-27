@@ -12,15 +12,17 @@ import { SERIES_PALETTE, TimeSeries } from '../components/TimeSeries.tsx';
 
 const WINDOWS = [120, 900, 1800, 3600];
 
+const BLANK_AUTH: KafkaAuth = {
+  securityProtocol: 'PLAINTEXT', saslMechanism: 'PLAIN',
+  username: '', password: '', sslCaLocation: '', sslSkipVerify: false, extra: {},
+};
+
 export function KafkaMonitorView(props: { onError: (m: string) => void }) {
   const { t } = useTranslation();
   const [payload, setPayload] = useState<KafkaMonitorPayload | null>(null);
   const [status, setStatus] = useState<MonitorStatus | null>(null);
   const [showAuth, setShowAuth] = useState(false);
-  const [auth, setAuth] = useState<KafkaAuth>({
-    securityProtocol: 'PLAINTEXT', saslMechanism: 'PLAIN',
-    username: '', password: '', sslCaLocation: '', sslSkipVerify: false, extra: {},
-  });
+  const [auth, setAuth] = useState<KafkaAuth>(() => structuredClone(BLANK_AUTH));
   const [bootstrap, setBootstrap] = useState('localhost:9092');
   const [interval, setIntervalSec] = useState(3);
   const [windowSec, setWindowSec] = useState(120);
@@ -121,6 +123,17 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
     }
   }
 
+  /**
+   * Empty the auth form. A running monitor keeps the settings it started with,
+   * so this only affects the next start — say so instead of implying a change
+   * that has not happened.
+   */
+  function clearAuth(): void {
+    setAuth(structuredClone(BLANK_AUTH));
+    setImportWarnings([]);
+    setImportNote(status?.running ? t('kafka.clearedWhileRunning') : t('kafka.cleared'));
+  }
+
   async function onImportFile(file: File): Promise<void> {
     if (file.size > 200_000) { props.onError(t('kafka.importTooBig')); return; }
     await applyImport(await file.text());
@@ -158,6 +171,10 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
               <div className="inline" style={{ marginBottom: 8 }}>
                 <button className="btn btn-sm" disabled={importBusy} onClick={() => setShowImport(true)}>
                   ⇧ {t('kafka.importAuth')}
+                </button>
+                <button className="btn btn-sm" disabled={importBusy || isBlankAuth(auth)}
+                  onClick={clearAuth} title={t('kafka.clearAuthHint')}>
+                  ✕ {t('kafka.clearAuth')}
                 </button>
                 <span className="field-hint">{t('kafka.importAuthHint')}</span>
               </div>
@@ -380,6 +397,12 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
       ) : null}
     </div>
   );
+}
+
+function isBlankAuth(auth: KafkaAuth): boolean {
+  return auth.securityProtocol === 'PLAINTEXT' && auth.saslMechanism === 'PLAIN'
+    && !auth.username && !auth.password && !auth.sslCaLocation && !auth.sslSkipVerify
+    && Object.keys(auth.extra).length === 0;
 }
 
 function padStart(values: number[], len: number): Array<number | null> {
