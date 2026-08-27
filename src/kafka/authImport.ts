@@ -10,7 +10,7 @@ import type { KafkaAuth } from '../shared/types.ts';
  * The document is only read — nothing is executed and nothing is stored.
  */
 
-export type AuthImportFormat = 'json' | 'yaml' | 'properties';
+export type AuthImportFormat = 'json' | 'yaml' | 'properties' | 'env';
 
 export interface AuthImportResult {
   auth: KafkaAuth;
@@ -23,11 +23,29 @@ export interface AuthImportResult {
 const PROTOCOLS = ['PLAINTEXT', 'SSL', 'SASL_PLAINTEXT', 'SASL_SSL'] as const;
 const MECHANISMS = ['PLAIN', 'SCRAM-SHA-256', 'SCRAM-SHA-512', 'GSSAPI', 'OAUTHBEARER'] as const;
 
-/** Namespaces librdkafka's admin client actually understands. */
+/** Global librdkafka properties an admin connection accepts. */
 const EXTRA_ALLOW: RegExp[] = [
   /^ssl\./, /^sasl\./, /^security\./, /^socket\./, /^broker\./, /^metadata\./,
-  /^reconnect\./, /^api\.version\./, /^enable\.ssl\./, /^topic\.metadata\./,
-  /^client\.(id|dns\.lookup)$/, /^connections\.max\.idle\.ms$/, /^log\.level$/,
+  /^reconnect\.backoff/, /^retry\.backoff/, /^api\.version\./, /^enable\.ssl\./,
+  /^topic\.metadata\./, /^client\.(id|dns\.lookup|rack)$/, /^connections\.max\.idle\.ms$/,
+  /^log(_level|\.level|\.connection\.close|\.queue|\.thread\.name)$/, /^debug$/,
+  /^statistics\.interval\.ms$/, /^allow\.auto\.create\.topics$/,
+];
+
+/**
+ * Settings that belong to a consumer or a producer. The lag monitor only opens
+ * an admin connection, so passing these through would either be ignored or
+ * rejected at connect time — they are dropped with the reason stated.
+ */
+const ROLE_ONLY: RegExp[] = [
+  /^group\./, /^partition\.assignment\.strategy$/, /^session\.timeout\.ms$/,
+  /^heartbeat\.interval\.ms$/, /^max\.poll\./, /^enable\.auto\.(commit|offset\.store)$/,
+  /^auto\.(commit|offset)\./, /^fetch\./, /^isolation\.level$/, /^check\.crcs$/,
+  /^queued\./, /^consume\./, /^acks$/, /^request\.required\.acks$/, /^retries$/,
+  /^message\.(send\.max\.retries|timeout\.ms|max\.bytes)$/, /^linger\.ms$/,
+  /^compression\./, /^batch\./, /^queue\.buffering\./, /^delivery\./,
+  /^transactional\./, /^enable\.idempotence$/, /^partitioner/, /^sticky\./,
+  /^(key|value)\.(de)?serializer$/, /^auto\.create\.topics\.enable$/,
 ];
 
 /** Java-only keys that live in the same namespaces but would be rejected. */
@@ -51,10 +69,11 @@ export function importKafkaAuth(source: string): AuthImportResult {
   if (!text) throw new Error('nothing to import');
 
   const warnings: string[] = [];
-  const format = detectFormat(text);
+  let format = detectFormat(text);
   const entries = format === 'properties'
     ? parseProperties(text)
     : parseDocument(text, format, warnings);
+  if (format === 'properties' && looksLikeEnv(entries)) format = 'env';
 
   if (entries.length === 0) throw new Error('no configuration keys found in the document');
 
@@ -67,17 +86,18 @@ export function importKafkaAuth(source: string): AuthImportResult {
   // ─── Brokers ──────────────────────────────────────────────────────────────
   const brokerEntry = take(entries, used, [
     'bootstrap.servers', 'metadata.broker.list', 'broker.list', 'brokers', 'bootstrap.server', 'servers',
-  ]);
+  ], [], { warnings });
   const bootstrapServers = brokerEntry ? normalizeBrokers(brokerEntry.value, warnings) : null;
 
   // ─── SASL credentials ─────────────────────────────────────────────────────
-  const mechEntry = take(entries, used, ['sasl.mechanism', 'sasl.mechanisms']);
+  const mechEntry = take(entries, used, ['sasl.mechanism', 'sasl.mechanisms'], [], { warnings });
   const jaas = take(entries, used, ['sasl.jaas.config']);
   const jaasParts = jaas ? parseJaas(jaas.value, warnings, Boolean(mechEntry)) : null;
 
-  const userEntry = take(entries, used, ['sasl.username', 'sasl.plain.username', 'username', 'user']);
+  const userEntry = take(entries, used, ['sasl.username', 'sasl.plain.username', 'username', 'user'], [], { warnings });
   const passEntry = take(entries, used, ['sasl.password', 'sasl.plain.password', 'password', 'pass'],
-    ['ssl.key.password', 'ssl.keystore.password', 'ssl.truststore.password', 'keystore.password', 'truststore.password']);
+    ['ssl.key.password', 'ssl.keystore.password', 'ssl.truststore.password', 'keystore.password', 'truststore.password'],
+    { warnings, secret: true });
   auth.username = userEntry?.value ?? jaasParts?.username ?? '';
   auth.password = passEntry?.value ?? jaasParts?.password ?? '';
 
@@ -87,7 +107,7 @@ export function importKafkaAuth(source: string): AuthImportResult {
   // ─── TLS ──────────────────────────────────────────────────────────────────
   const caEntry = take(entries, used, [
     'ssl.ca.location', 'ssl.ca.file', 'ssl.cafile', 'ssl.ca.path', 'ssl.ca.cert', 'ssl.ca', 'ca.location', 'ca.file', 'ca',
-  ]);
+  ], [], { warnings });
   auth.sslCaLocation = caEntry?.value ?? '';
 
   const verifyEntry = take(entries, used, [
@@ -112,7 +132,7 @@ export function importKafkaAuth(source: string): AuthImportResult {
   // ─── Security protocol ────────────────────────────────────────────────────
   // `ssl.protocol` is Java's TLS version, not a Kafka security protocol.
   const protoEntry = take(entries, used, ['security.protocol', 'protocol'],
-    ['ssl.protocol', 'ssl.enabled.protocols', 'tls.protocol']);
+    ['ssl.protocol', 'ssl.enabled.protocols', 'tls.protocol'], { warnings });
   const sslFlag = take(entries, used, ['ssl.enabled', 'ssl', 'tls.enabled', 'tls']);
   const hasSasl = Boolean(auth.username || auth.password || mechEntry || jaas);
   const hasTls = Boolean(auth.sslCaLocation) || (sslFlag ? truthy(sslFlag.value) : false);
@@ -142,35 +162,70 @@ export function importKafkaAuth(source: string): AuthImportResult {
 
   // ─── Everything else ──────────────────────────────────────────────────────
   const ignored: string[] = [];
+  const roleOnly: string[] = [];
   for (const e of entries) {
     if (used.has(e)) continue;
-    const key = librdkafkaTail(e.canon);
-    if (!key || EXTRA_DENY.some((r) => r.test(key))) {
-      ignored.push(e.path);
+    const found = classify(e.canon);
+
+    if (found.kind === 'role') {
+      // The group a consumer joins is what the monitor reports lag *for*, so
+      // say where it went rather than listing it as one more dropped key.
+      if (found.key === 'group.id' && e.value) {
+        warnings.push(`${e.path} names the consumer group "${e.value}" — the monitor watches every group, narrow to it with the Groups filter`);
+      } else {
+        roleOnly.push(e.path);
+      }
       continue;
     }
-    auth.extra[key] = e.value;
+    if (found.kind === 'unknown') { ignored.push(e.path); continue; }
+
+    // Two sections of the same file (KAFKA_CONSUMER_* and KAFKA_PRODUCER_*)
+    // can set one property twice; a silent last-one-wins would be a trap.
+    const existing = auth.extra[found.key];
+    if (existing !== undefined && existing !== e.value) {
+      warnings.push(`${e.path} sets ${found.key} to "${e.value}" but it is already "${existing}" — kept the first`);
+      continue;
+    }
+    auth.extra[found.key] = e.value;
+  }
+  if (roleOnly.length) {
+    warnings.push(`ignored ${count(roleOnly)} consumer/producer setting${plural(roleOnly)} — the monitor only opens an admin connection: ${list(roleOnly)}`);
   }
   if (ignored.length) {
-    const shown = ignored.slice(0, 8).join(', ');
-    warnings.push(`ignored ${ignored.length} key${ignored.length === 1 ? '' : 's'} the monitor's client does not use: ${shown}${ignored.length > 8 ? ', …' : ''}`);
+    warnings.push(`ignored ${count(ignored)} key${plural(ignored)} the monitor's client does not use: ${list(ignored)}`);
   }
 
   return { auth, bootstrapServers, format, warnings };
 }
 
 /**
- * Return the part of a key that is a librdkafka property, or null. Nested
- * documents put the real property behind a wrapper (`kafka.socket.timeout.ms`),
- * so every tail is tried, longest first.
+ * Decide what a leftover key is. Documents wrap the real property behind a
+ * prefix — `kafka.socket.timeout.ms`, or a `KAFKA_CONSUMER_` env section — so
+ * every tail is tried, longest first.
  */
-function librdkafkaTail(canon: string): string | null {
+function classify(canon: string):
+  | { kind: 'extra'; key: string }
+  | { kind: 'role'; key: string }
+  | { kind: 'unknown' } {
   const parts = canon.split('.');
   for (let i = 0; i < parts.length; i++) {
     const tail = parts.slice(i).join('.');
-    if (EXTRA_ALLOW.some((r) => r.test(tail))) return tail;
+    if (EXTRA_DENY.some((r) => r.test(tail))) return { kind: 'unknown' };
+    if (EXTRA_ALLOW.some((r) => r.test(tail))) return { kind: 'extra', key: librdkafkaName(tail) };
+    if (ROLE_ONLY.some((r) => r.test(tail))) return { kind: 'role', key: tail };
   }
-  return null;
+  return { kind: 'unknown' };
+}
+
+/** librdkafka spells one property with an underscore, against its own convention. */
+function librdkafkaName(key: string): string {
+  return key === 'log.level' ? 'log_level' : key;
+}
+
+function count(xs: string[]): number { return xs.length; }
+function plural(xs: string[]): string { return xs.length === 1 ? '' : 's'; }
+function list(xs: string[]): string {
+  return xs.slice(0, 8).join(', ') + (xs.length > 8 ? ', …' : '');
 }
 
 function inferProtocol(hasSasl: boolean, hasTls: boolean): KafkaAuth['securityProtocol'] {
@@ -207,11 +262,31 @@ function parseProperties(text: string): Entry[] {
     const at = eq >= 0 && (colon < 0 || eq < colon) ? eq : colon;
     if (at <= 0) continue;
     const key = l.slice(0, at).trim().replace(/^export\s+/, '');
-    const value = unquote(l.slice(at + 1).trim());
+    const rhs = l.slice(at + 1).trim();
+    // A quoted value ends at its closing quote — a password may well contain a
+    // '#', and .env lines often carry a `# comment` after the value.
+    const quote = /^(['"])/.exec(rhs)?.[1];
+    let value: string;
+    if (quote) {
+      const end = rhs.indexOf(quote, 1);
+      value = end > 0 ? rhs.slice(1, end) : rhs.slice(1);
+    } else {
+      value = rhs.replace(/\s+#.*$/, '').trim();
+    }
     if (!key) continue;
     out.push({ path: key, canon: canonKey(key), value, raw: value });
   }
   return out;
+}
+
+/**
+ * A .env is a properties file whose keys are SHOUTED. Worth telling apart only
+ * so the confirmation names the format the user actually pasted.
+ */
+function looksLikeEnv(entries: Entry[]): boolean {
+  if (entries.length === 0) return false;
+  const shouted = entries.filter((e) => /^[A-Z][A-Z0-9_]*$/.test(e.path)).length;
+  return shouted / entries.length >= 0.6;
 }
 
 function parseDocument(text: string, format: AuthImportFormat, warnings: string[]): Entry[] {
@@ -278,17 +353,27 @@ function canonKey(raw: string): string {
  * Match on the tail of the key so a nested document works without knowing its
  * wrapper: `kafka.sasl.username` and `spec.client.sasl.username` both hit.
  */
-function take(entries: Entry[], used: Set<Entry>, aliases: string[], deny: string[] = []): Entry | null {
+function take(
+  entries: Entry[], used: Set<Entry>, aliases: string[], deny: string[] = [],
+  conflicts?: { warnings: string[]; secret?: boolean },
+): Entry | null {
+  let first: Entry | null = null;
   for (const alias of aliases) {
     for (const e of entries) {
       if (used.has(e)) continue;
       if (e.canon !== alias && !e.canon.endsWith(`.${alias}`)) continue;
       if (deny.some((d) => e.canon === d || e.canon.endsWith(`.${d}`))) continue;
       used.add(e);
-      return e;
+      if (!first) { first = e; continue; }
+      // Every match is consumed so a KAFKA_PRODUCER_* copy of the same setting
+      // is not reported later as an unknown key.
+      if (e.value === first.value || !conflicts) continue;
+      conflicts.warnings.push(conflicts.secret
+        ? `${e.path} disagrees with ${first.path} — kept the first`
+        : `${e.path} says "${e.value}" but ${first.path} already said "${first.value}" — kept the first`);
     }
   }
-  return null;
+  return first;
 }
 
 function unquote(v: string): string {

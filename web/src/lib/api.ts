@@ -110,7 +110,7 @@ export const api = {
   importKafkaAuth: (content: string) => req<{
     auth: KafkaAuth;
     bootstrapServers: string | null;
-    format: 'json' | 'yaml' | 'properties';
+    format: 'json' | 'yaml' | 'properties' | 'env';
     warnings: string[];
   }>('/api/kafka/monitor/auth/import', { method: 'POST', body: JSON.stringify({ content }) }),
 };
