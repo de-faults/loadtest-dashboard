@@ -266,7 +266,22 @@
     "skipVerify": "Skip certificate verification",
     "skipVerifyHint": "Disables broker certificate checks. Use only against a test cluster.",
     "extraProps": "Extra librdkafka properties",
-    "authHint": "Leave as PLAINTEXT for a local broker with no auth."
+    "authHint": "Leave as PLAINTEXT for a local broker with no auth.",
+    "importAuth": "Import config",
+    "importAuthHint": "Fill this form from a client.properties, YAML or JSON you already have.",
+    "importTitle": "Import broker configuration",
+    "importHint": "Paste a librdkafka or Java client.properties, a KafkaJS options object, a Helm/YAML fragment, or KAFKA_* environment lines. Keys are matched however they are written — security.protocol, securityProtocol or KAFKA_SECURITY_PROTOCOL all land in the same field.",
+    "importPlaceholder": "bootstrap.servers=broker:9093\nsecurity.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.username=svc\nsasl.password=…",
+    "importPrivacy": "The document is parsed, never executed, and is not saved — only the fields it fills are kept.",
+    "importApply": "Import",
+    "importFile": "Choose file…",
+    "importOk": "Imported from {{format}}.",
+    "importBrokers": "brokers set to {{value}}",
+    "importBrokersHeld": "brokers {{value}} not applied — stop the monitor first",
+    "importPassword": "password taken from the document",
+    "importFailed": "Import failed",
+    "importEmpty": "Nothing to import.",
+    "importTooBig": "File too large (limit 200 KB)."
   },
   "settings": {
     "title": "Settings",

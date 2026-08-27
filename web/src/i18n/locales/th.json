@@ -266,7 +266,22 @@
     "skipVerify": "ข้ามการตรวจสอบ certificate",
     "skipVerifyHint": "ปิดการตรวจ certificate ของโบรกเกอร์ ใช้กับคลัสเตอร์ทดสอบเท่านั้น",
     "extraProps": "คุณสมบัติ librdkafka เพิ่มเติม",
-    "authHint": "โบรกเกอร์ในเครื่องที่ไม่มี auth ให้ปล่อยเป็น PLAINTEXT"
+    "authHint": "โบรกเกอร์ในเครื่องที่ไม่มี auth ให้ปล่อยเป็น PLAINTEXT",
+    "importAuth": "นำเข้าค่าตั้ง",
+    "importAuthHint": "กรอกฟอร์มนี้จาก client.properties, YAML หรือ JSON ที่มีอยู่แล้ว",
+    "importTitle": "นำเข้าค่าตั้งการเชื่อมต่อ broker",
+    "importHint": "วาง client.properties ของ librdkafka หรือ Java, ออบเจ็กต์ตัวเลือกของ KafkaJS, ชิ้นส่วน YAML ของ Helm หรือบรรทัดตัวแปรแวดล้อม KAFKA_* ก็ได้ ระบบจับคู่คีย์ได้ทุกรูปแบบการเขียน — security.protocol, securityProtocol หรือ KAFKA_SECURITY_PROTOCOL ลงช่องเดียวกัน",
+    "importPlaceholder": "bootstrap.servers=broker:9093\nsecurity.protocol=SASL_SSL\nsasl.mechanism=SCRAM-SHA-512\nsasl.username=svc\nsasl.password=…",
+    "importPrivacy": "เอกสารถูกอ่านเพื่อแปลงค่าเท่านั้น ไม่ถูกรันและไม่ถูกบันทึก เก็บเฉพาะค่าที่กรอกลงฟอร์ม",
+    "importApply": "นำเข้า",
+    "importFile": "เลือกไฟล์…",
+    "importOk": "นำเข้าจาก {{format}} แล้ว",
+    "importBrokers": "ตั้ง brokers เป็น {{value}}",
+    "importBrokersHeld": "ยังไม่ใช้ brokers {{value}} — หยุด monitor ก่อน",
+    "importPassword": "ได้รหัสผ่านจากเอกสาร",
+    "importFailed": "นำเข้าไม่สำเร็จ",
+    "importEmpty": "ไม่มีอะไรให้นำเข้า",
+    "importTooBig": "ไฟล์ใหญ่เกินไป (จำกัด 200 KB)"
   },
   "settings": {
     "title": "การตั้งค่าระบบ",

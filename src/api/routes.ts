@@ -12,6 +12,7 @@ import {
 } from '../runners/manager.ts';
 import { ingestArtilleryReport } from '../runners/artillery.runner.ts';
 import { monitorStatus, startMonitor, stopMonitor } from '../kafka/monitor.ts';
+import { importKafkaAuth } from '../kafka/authImport.ts';
 import { exampleScript } from '../runners/script.ts';
 import {
   detectProtocol, exportScript, importScript, SCRIPT_FILENAME, SCRIPT_MIME,
@@ -293,6 +294,26 @@ export function registerRoutes(app: FastifyInstance): void {
     return monitorStatus();
   });
   app.post('/api/kafka/monitor/stop', async () => { stopMonitor(); return monitorStatus(); });
+
+  /**
+   * Turn a pasted broker configuration — JSON, YAML or a .properties file —
+   * into the monitor's auth form. The document is parsed, never executed, and
+   * nothing about it is stored: it goes straight back to the form it came from.
+   */
+  app.post('/api/kafka/monitor/auth/import', async (req, reply) => {
+    const body = req.body as { content?: string };
+    const content = typeof body?.content === 'string' ? body.content : '';
+    if (!content.trim()) return reply.code(400).send({ error: 'empty document' });
+    if (content.length > 200_000) return reply.code(413).send({ error: 'document too large (limit 200 KB)' });
+    try {
+      const result = importKafkaAuth(content);
+      const parsed = kafkaAuthSchema.safeParse(result.auth);
+      if (!parsed.success) return reply.code(422).send({ error: parsed.error.issues });
+      return result;
+    } catch (err) {
+      return reply.code(422).send({ error: (err as Error).message });
+    }
+  });
 
   // ─── Artillery plugin ingest ──────────────────────────────────────────────
   app.post('/_ingest/artillery/:runId', async (req, reply) => {

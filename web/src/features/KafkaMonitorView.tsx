@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { KafkaAuth, KafkaMonitorPayload, RunEvent } from '@shared/types.ts';
 import { api, type MonitorStatus } from '../lib/api.ts';
@@ -6,6 +6,7 @@ import { CheckField, KeyValueEditor, SelectField, TextField } from '../component
 import { useEventStream } from '../lib/sse.ts';
 import { compact, num } from '../lib/format.ts';
 import { Empty, Panel } from '../components/Panel.tsx';
+import { Modal } from '../components/Modal.tsx';
 import { Badge } from '../components/Stat.tsx';
 import { SERIES_PALETTE, TimeSeries } from '../components/TimeSeries.tsx';
 
@@ -27,6 +28,14 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
   // narrow it. Env vars only seed the defaults.
   const [topicFilter, setTopicFilter] = useState<string>('');
   const [groupFilter, setGroupFilter] = useState<string>('');
+  // Broker settings usually already exist somewhere — a client.properties, a
+  // Helm values file, a KafkaJS snippet. Import parses any of them into the form.
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importBusy, setImportBusy] = useState(false);
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [importWarnings, setImportWarnings] = useState<string[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.kafkaMonitor().then((s) => {
@@ -88,6 +97,35 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
     } catch (e) { props.onError((e as Error).message); }
   }
 
+  async function applyImport(content: string): Promise<void> {
+    if (!content.trim()) { props.onError(t('kafka.importEmpty')); return; }
+    setImportBusy(true);
+    try {
+      const res = await api.importKafkaAuth(content);
+      setAuth(res.auth);
+      const notes = [t('kafka.importOk', { format: res.format.toUpperCase() })];
+      if (res.bootstrapServers) {
+        if (status?.running) notes.push(t('kafka.importBrokersHeld', { value: res.bootstrapServers }));
+        else { setBootstrap(res.bootstrapServers); notes.push(t('kafka.importBrokers', { value: res.bootstrapServers })); }
+      }
+      if (res.auth.password) notes.push(t('kafka.importPassword'));
+      setImportNote(notes.join(' · '));
+      setImportWarnings(res.warnings);
+      setShowImport(false);
+      setImportText('');
+      setShowAuth(true);
+    } catch (e) {
+      props.onError(`${t('kafka.importFailed')}: ${(e as Error).message}`);
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  async function onImportFile(file: File): Promise<void> {
+    if (file.size > 200_000) { props.onError(t('kafka.importTooBig')); return; }
+    await applyImport(await file.text());
+  }
+
   return (
     <div className="grid">
       <div className="col-12">
@@ -117,6 +155,23 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
 
           {showAuth ? (
             <div className="panel-body" style={{ borderTop: '1px solid var(--border)' }}>
+              <div className="inline" style={{ marginBottom: 8 }}>
+                <button className="btn btn-sm" disabled={importBusy} onClick={() => setShowImport(true)}>
+                  ⇧ {t('kafka.importAuth')}
+                </button>
+                <span className="field-hint">{t('kafka.importAuthHint')}</span>
+              </div>
+
+              {importNote ? <div className="script-note">✓ {importNote}</div> : null}
+              {importWarnings.length ? (
+                <div className="script-warn">
+                  <strong>{t('script.warnings', { count: importWarnings.length })}</strong>
+                  <ul style={{ margin: '4px 0 0 16px' }}>
+                    {importWarnings.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                </div>
+              ) : null}
+
               <div className="field-row">
                 <SelectField
                   label={t('kafka.securityProtocol')} value={auth.securityProtocol}
@@ -167,6 +222,52 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
           ) : null}
         </section>
       </div>
+
+      {showImport ? (
+        <Modal
+          wide
+          title={t('kafka.importTitle')}
+          onClose={() => setShowImport(false)}
+          footer={
+            <>
+              <button className="btn btn-primary" disabled={importBusy || !importText.trim()}
+                onClick={() => void applyImport(importText)}>
+                {t('kafka.importApply')}
+              </button>
+              <button className="btn" disabled={importBusy} onClick={() => fileRef.current?.click()}>
+                {t('kafka.importFile')}
+              </button>
+              <button className="btn" disabled={!importText} onClick={() => setImportText('')}>
+                {t('common.clear')}
+              </button>
+              <span className="spacer" style={{ flex: 1 }} />
+              <button className="btn" onClick={() => setShowImport(false)}>{t('common.close')}</button>
+            </>
+          }
+        >
+          <div className="field-hint" style={{ marginBottom: 6 }}>{t('kafka.importHint')}</div>
+          <textarea
+            className="script-area"
+            spellCheck={false}
+            placeholder={t('kafka.importPlaceholder')}
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+          />
+          <div className="field-hint">{t('kafka.importPrivacy')}</div>
+        </Modal>
+      ) : null}
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".json,.yml,.yaml,.properties,.conf,.cfg,.env,.txt"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void onImportFile(f);
+          e.target.value = '';
+        }}
+      />
 
       {!status?.running && !payload ? (
         <div className="col-12"><Empty text={t('kafka.notRunning')} /></div>

@@ -107,6 +107,12 @@ export const api = {
       method: 'POST', body: JSON.stringify({ bootstrapServers, intervalSec, auth }),
     }),
   stopKafkaMonitor: () => req<MonitorStatus>('/api/kafka/monitor/stop', { method: 'POST' }),
+  importKafkaAuth: (content: string) => req<{
+    auth: KafkaAuth;
+    bootstrapServers: string | null;
+    format: 'json' | 'yaml' | 'properties';
+    warnings: string[];
+  }>('/api/kafka/monitor/auth/import', { method: 'POST', body: JSON.stringify({ content }) }),
 };
 
 /** Browser downloads must carry the token too, so build the URL with it. */
