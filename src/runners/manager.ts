@@ -170,6 +170,9 @@ function buildSummary(ctx: RunnerContext, profileName: string, target: string, e
   // window would otherwise drag the average below the real throughput.
   const seconds = durationMs / 1000;
   const throughput = seconds > 0 ? Math.round((agg.totalRequests / seconds) * 10) / 10 : 0;
+  const transactionRate = seconds > 0 && agg.totalTransactions > 0
+    ? Math.round((agg.totalTransactions / seconds) * 10) / 10
+    : throughput;
   return {
     runId: ctx.runId,
     protocol: ctx.config.protocol,
@@ -184,7 +187,7 @@ function buildSummary(ctx: RunnerContext, profileName: string, target: string, e
     successRatePct: agg.successRatePct,
     rpsAvg: throughput,
     rpsPeak: agg.rpsPeak,
-    tpsAvg: throughput,
+    tpsAvg: transactionRate,
     tpsPeak: agg.tpsPeak,
     vusMax: agg.vusMax,
     latency: agg.latencyProfile(),

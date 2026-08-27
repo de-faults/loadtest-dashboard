@@ -18,6 +18,7 @@ export class Aggregator {
   private window = new Histogram();
   private windowStart: number;
   private wRequests = 0;
+  private wTransactions = 0;
   private wSuccess = 0;
   private wFailed = 0;
   private wLag: number | undefined;
@@ -25,6 +26,12 @@ export class Aggregator {
   totalRequests = 0;
   totalSuccess = 0;
   totalFailed = 0;
+  /**
+   * Completed transactions (k6 iterations). One transaction can issue several
+   * requests, so TPS is genuinely different from RPS and must be counted, not
+   * copied from it.
+   */
+  totalTransactions = 0;
   vus = 0;
   vusMax = 0;
   rpsPeak = 0;
@@ -97,6 +104,12 @@ export class Aggregator {
     }
   }
 
+  /** One completed iteration / transaction. */
+  recordTransaction(count = 1): void {
+    this.wTransactions += count;
+    this.totalTransactions += count;
+  }
+
   setVus(n: number): void {
     this.vus = n;
     if (n > this.vusMax) this.vusMax = n;
@@ -128,6 +141,9 @@ export class Aggregator {
 
     const seconds = elapsedMs / 1000;
     const rps = this.wRequests / seconds;
+    // Runners that have no separate notion of a transaction (Kafka messages,
+    // socket emits) report the same number for both, rather than a hollow zero.
+    const tps = this.totalTransactions > 0 ? this.wTransactions / seconds : rps;
     const w: WindowMetrics = {
       ts: now,
       elapsed: Math.round((now - this.startedAt) / 100) / 10,
@@ -135,7 +151,7 @@ export class Aggregator {
       success: this.wSuccess,
       failed: this.wFailed,
       rps: Math.round(rps * 10) / 10,
-      tps: Math.round(rps * 10) / 10,
+      tps: Math.round(tps * 10) / 10,
       vus: this.vus,
       latency: this.window.profile(),
       consumerLag: this.wLag,
@@ -148,6 +164,7 @@ export class Aggregator {
 
     this.window = new Histogram();
     this.wRequests = 0;
+    this.wTransactions = 0;
     this.wSuccess = 0;
     this.wFailed = 0;
     this.wLag = undefined;

@@ -126,10 +126,19 @@ export function RunView(props: {
   const isKafka = (detail?.protocol ?? summary?.protocol) === 'kafka';
 
   const x = useMemo(() => samples.map((s) => s.elapsed), [samples]);
+  // Only plot TPS separately when it is actually a different measurement —
+  // for Kafka and sockets it mirrors RPS and a duplicate line adds nothing.
+  const tpsDiffers = useMemo(
+    () => samples.some((s) => Math.abs(s.tps - s.rps) > 0.05),
+    [samples],
+  );
   const throughput = useMemo(() => [
-    { label: isKafka ? t('metrics.tps') : t('metrics.rps'), color: COLORS.green, values: samples.map((s) => s.rps), fill: true },
+    { label: t('metrics.rps'), color: COLORS.green, values: samples.map((s) => s.rps), fill: true },
+    ...(tpsDiffers
+      ? [{ label: t('metrics.tps'), color: COLORS.cyan, values: samples.map((s) => s.tps) }]
+      : []),
     { label: t('metrics.vus'), color: COLORS.purple, values: samples.map((s) => s.vus), axis: 'right' as const },
-  ], [samples, isKafka, t]);
+  ], [samples, tpsDiffers, t]);
 
   const latencySeries = useMemo(() => [
     { label: 'p90', color: COLORS.cyan, values: samples.map((s) => s.latency.p90) },
@@ -199,10 +208,16 @@ export function RunView(props: {
               tone={successRate >= 99 ? 'green' : successRate >= 95 ? 'yellow' : 'red'} />
             <Stat label={t('metrics.duration')} value={duration(elapsedMs)} tone="cyan" />
             <Stat
-              label={isKafka ? t('metrics.tps') : t('metrics.rps')}
+              label={t('metrics.rps')}
               value={compact(summary ? summary.rpsAvg : latest?.rps ?? 0)}
               sub={`${t('metrics.peak')} ${compact(summary?.rpsPeak ?? Math.max(0, ...samples.map((s) => s.rps)))}`}
               tone="green"
+            />
+            <Stat
+              label={t('metrics.tps')}
+              value={compact(summary ? summary.tpsAvg : latest?.tps ?? 0)}
+              sub={`${t('metrics.peak')} ${compact(summary?.tpsPeak ?? Math.max(0, ...samples.map((s) => s.tps)))}`}
+              tone="cyan"
             />
             <Stat label={t('metrics.vus')} value={num(summary ? summary.vusMax : latest?.vus ?? 0)} tone="purple" />
             <Stat label="p95" value={ms(latency?.p95)} sub={`p99 ${ms(latency?.p99)}`}
@@ -214,7 +229,7 @@ export function RunView(props: {
               <Panel title={t('metrics.throughput')}>
                 {samples.length ? (
                   <TimeSeries x={x} series={throughput} height={230}
-                    yLabel={isKafka ? t('metrics.tps') : t('metrics.rps')} rightLabel={t('metrics.vus')} />
+                    yLabel={t('metrics.rps')} rightLabel={t('metrics.vus')} />
                 ) : <Empty text={t('common.empty')} />}
               </Panel>
             </div>

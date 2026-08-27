@@ -127,6 +127,11 @@ function consumePoint(line: string, ctx: RunnerContext): void {
       }
       break;
     }
+    case 'iterations':
+      // One iteration = one transaction. A scenario issuing several requests
+      // per iteration makes TPS meaningfully lower than RPS.
+      ctx.agg.recordTransaction(value || 1);
+      break;
     case 'vus':
       ctx.agg.setVus(Math.round(value));
       break;

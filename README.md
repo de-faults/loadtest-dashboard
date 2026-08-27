@@ -76,6 +76,12 @@ histogram is persisted per run, so exact percentiles stay recomputable.
 mean of per-second windows: a partial trailing window would drag the mean below the
 real number.
 
+RPS and TPS are separate measurements, not two labels for one number. RPS counts
+HTTP requests; TPS counts completed transactions (k6 iterations). A scenario that
+issues three requests per iteration reports roughly 3× the RPS of its TPS. Where a
+runner has no distinct notion of a transaction — one Kafka message, one socket
+emit — the two are equal by definition and the chart plots a single line.
+
 **Per protocol:**
 
 - **REST** — k6 streams `--out json` to a file which the server tails. Latency and
