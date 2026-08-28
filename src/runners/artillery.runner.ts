@@ -39,6 +39,8 @@ interface IngestState {
   warnedLatency?: boolean;
   /** True once a genuine round-trip metric has been reported. */
   sawRtt?: boolean;
+  /** Last tick that carried real work — messages sent, or virtual users ending. */
+  lastProgressAt?: number;
 }
 const ingest = new Map<string, IngestState>();
 
@@ -148,21 +150,47 @@ export const artilleryRunner: Runner = {
      */
     let stalled = false;
     let exited = false;
-    // Virtual users created in the final second still have their whole scenario
-    // to run — think time included — so that budget is added to the grace period
-    // rather than being mistaken for a stall.
-    const graceSec = Math.max(60, Math.round(phasesSec * 0.25)) + scenarioBudgetSec;
+    const startedAt = Date.now();
+    state.lastProgressAt = startedAt;
+
+    // How long a test may legitimately look idle: a virtual user created in the
+    // final second still has its whole scenario to run — think time, plus the
+    // engine's own timeout on every step that waits for the server.
+    const idleMs = Math.max(15, scenarioBudgetSec) * 1000;
+    const phasesEndAt = startedAt + phasesSec * 1000;
+
+    /**
+     * Stall watchdog.
+     *
+     * A Socket.IO `emit` awaiting an acknowledgement has no timeout in
+     * artillery's engine: if the ack never arrives — the target dropped the
+     * connection, or simply never answered — that virtual user's scenario never
+     * ends and artillery waits for it forever, writing no report.
+     *
+     * Waiting a fixed grace period past the phases punished short tests: ten
+     * seconds of load could sit another seventy doing nothing. What matters is
+     * not how long it has been, but whether anything is still happening.
+     */
     const watchdog = phasesSec > 0
-      ? setTimeout(() => {
+      ? setInterval(() => {
           if (exited) return;
+          const now = Date.now();
+          if (now < phasesEndAt + idleMs) return;
+          const idleFor = now - (state.lastProgressAt ?? startedAt);
+          if (idleFor < idleMs) return;
+
           stalled = true;
-          ctx.error('artillery-stalled', `no exit ${graceSec}s after the last phase ended`);
+          const pending = Math.max(0, state.created - state.finished);
+          const detail = `nothing happened for ${Math.round(idleFor / 1000)}s`
+            + (pending > 0 ? `, ${pending} virtual user${pending === 1 ? '' : 's'} never finished` : '');
+          ctx.error('artillery-stalled', detail);
           ctx.log('error',
-            `artillery is still running ${graceSec}s after its ${phasesSec}s of phases ended and is being stopped. `
-            + 'A virtual user is most likely waiting on an acknowledgement that never arrived.');
+            `artillery stopped making progress ${Math.round(idleFor / 1000)}s ago and its ${phasesSec}s of phases are over, `
+            + `so it is being stopped. ${pending > 0 ? `${pending} virtual user${pending === 1 ? ' is' : 's are'} ` : 'A virtual user is '}`
+            + 'most likely waiting on an acknowledgement that never arrived.');
           child.kill('SIGINT');
           setTimeout(() => { if (!exited) child.kill('SIGKILL'); }, 10_000).unref();
-        }, (phasesSec + graceSec) * 1000)
+        }, 2_000)
       : null;
     watchdog?.unref();
 
@@ -171,7 +199,7 @@ export const artilleryRunner: Runner = {
       child.on('error', (err) => { exited = true; ctx.error('spawn', `${bin}: ${err.message}`); resolve(null); });
     });
 
-    if (watchdog) clearTimeout(watchdog);
+    if (watchdog) clearInterval(watchdog);
     ctx.signal.removeEventListener('abort', onAbort);
     ingest.delete(ctx.runId);
 
@@ -227,12 +255,16 @@ async function injectPlugin(
 }
 
 /**
- * Longest a single virtual user may legitimately take: its think time plus the
- * engine's own 10s timeout for every step that waits on the server.
+ * Longest a single virtual user may legitimately be quiet: its think time, plus
+ * one allowance for a step waiting on the server.
+ *
+ * The allowance is flat rather than per step because it is not a sum of
+ * timeouts — an emit awaiting an acknowledgement has no timeout at all, so a
+ * step that has waited this long is not slow, it is stuck.
  */
 function flowBudgetSec(steps: Array<{ think: number; waits: boolean }>): number {
   const think = steps.reduce((sum, s) => sum + s.think, 0);
-  const waits = steps.filter((s) => s.waits).length * 10;
+  const waits = steps.some((s) => s.waits) ? 10 : 0;
   return Math.min(think + waits, 3600);
 }
 
@@ -257,6 +289,11 @@ function applyReport(state: IngestState, report: ArtilleryReport): void {
   state.created += c['vusers.created'] ?? 0;
   state.finished += (c['vusers.completed'] ?? 0) + (c['vusers.failed'] ?? 0);
   ctx.agg.setVus(Math.max(0, state.created - state.finished));
+
+  // Sending a message or finishing a virtual user is progress; a period that
+  // reports neither is a test standing still. The stall watchdog reads this.
+  const ended = (c['vusers.completed'] ?? 0) + (c['vusers.failed'] ?? 0);
+  if (sent > 0 || ended > 0 || (c['vusers.created'] ?? 0) > 0) state.lastProgressAt = Date.now();
 
   // Prefer true round-trip time when the flow measured it. `vusers.session_length`
   // is the fallback and measures something else — whole-scenario duration,
