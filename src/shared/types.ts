@@ -89,8 +89,7 @@ export type RunEvent =
   | { t: 'error'; runId: string; ts: number; kind: string; message: string; count: number }
   | { t: 'log'; runId: string; ts: number; level: 'info' | 'warn' | 'error'; line: string }
   | { t: 'end'; runId: string; endedAt: number; state: RunState; summary: RunSummary }
-  | { t: 'kafka-monitor'; runId: string | null; payload: KafkaMonitorPayload }
-  | { t: 'queue'; runId: null; pending: Array<{ queueId: string; profileName: string; protocol: Protocol }> };
+  | { t: 'kafka-monitor'; runId: string | null; payload: KafkaMonitorPayload };
 
 // ─── Run configuration ───────────────────────────────────────────────────────
 

@@ -92,12 +92,12 @@ export const api = {
   runs: () => req<RunRow[]>('/api/runs'),
   activeRuns: () => req<Array<{ runId: string; protocol: Protocol; profileName: string; startedAt: number }>>('/api/runs/active'),
   run: (id: string) => req<RunDetail>(`/api/runs/${id}`),
+  /** Every selected profile starts at once; `failed` names the ones that did not. */
   startRun: (body: { profileId?: string; profileIds?: string[]; profileName?: string; config?: RunConfig }) =>
-    req<{ runId: string | null; target: string; queued: Array<{ queueId: string; profileName: string }> }>(
-      '/api/runs', { method: 'POST', body: JSON.stringify(body) }),
-  queue: () => req<Array<{ queueId: string; profileName: string; protocol: Protocol }>>('/api/runs/queue'),
-  clearQueue: () => req<{ removed: number }>('/api/runs/queue', { method: 'DELETE' }),
-  dequeue: (queueId: string) => req<{ ok: true }>(`/api/runs/queue/${queueId}`, { method: 'DELETE' }),
+    req<{
+      runs: Array<{ runId: string; profileName: string; protocol: Protocol; target: string }>;
+      failed: Array<{ profileName: string; error: string }>;
+    }>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   stopRun: (id: string) => req<{ ok: true }>(`/api/runs/${id}/stop`, { method: 'POST' }),
   deleteRun: (id: string) => req<{ ok: true }>(`/api/runs/${id}`, { method: 'DELETE' }),
 

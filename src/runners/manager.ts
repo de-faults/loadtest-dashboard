@@ -31,59 +31,6 @@ interface ActiveRun {
 
 const active = new Map<string, ActiveRun>();
 
-/**
- * Pending runs.
- *
- * Selecting several profiles runs them one after another rather than at once:
- * concurrent load generators on one host compete for CPU and sockets and skew
- * each other's latency numbers, which is exactly what the tool is measuring.
- */
-interface QueuedRun {
-  queueId: string;
-  profileId: string | null;
-  profileName: string;
-  config: RunConfig;
-}
-
-const queue: QueuedRun[] = [];
-
-export function queuedRuns(): Array<{ queueId: string; profileName: string; protocol: Protocol }> {
-  return queue.map((q) => ({ queueId: q.queueId, profileName: q.profileName, protocol: q.config.protocol }));
-}
-
-function publishQueue(): void {
-  bus.publish({ t: 'queue', runId: null, pending: queuedRuns() });
-}
-
-export function clearQueue(): number {
-  const n = queue.length;
-  queue.length = 0;
-  publishQueue();
-  return n;
-}
-
-export function dequeue(queueId: string): boolean {
-  const i = queue.findIndex((q) => q.queueId === queueId);
-  if (i < 0) return false;
-  queue.splice(i, 1);
-  publishQueue();
-  return true;
-}
-
-/** Start the next queued run, if nothing is in flight. */
-function startNext(): void {
-  if (active.size >= MAX_CONCURRENT_RUNS) return;
-  const next = queue.shift();
-  if (!next) return;
-  publishQueue();
-  try {
-    launch(next.config, next.profileId, next.profileName);
-  } catch {
-    // A queued profile that cannot start must not strand the rest of the batch.
-    startNext();
-  }
-}
-
 export function activeRuns(): Array<{ runId: string; protocol: Protocol; profileName: string; startedAt: number }> {
   return [...active.values()].map((r) => ({
     runId: r.runId, protocol: r.protocol, profileName: r.profileName, startedAt: r.startedAt,
@@ -105,44 +52,54 @@ export function stopRun(runId: string): boolean {
 }
 
 export function stopAll(): void {
-  // Clear the queue first, or aborting the active run just starts the next one.
-  queue.length = 0;
   for (const r of active.values()) r.abort.abort();
 }
 
-export function startRun(args: {
+export interface StartEntry {
   config: RunConfig;
   profileId: string | null;
   profileName: string;
-}): string {
+}
+
+export interface StartedRun {
+  runId: string;
+  profileName: string;
+  protocol: Protocol;
+  target: string;
+}
+
+export function startRun(args: StartEntry): string {
   if (active.size >= MAX_CONCURRENT_RUNS) {
-    throw new Error(`a run is already in progress (limit ${MAX_CONCURRENT_RUNS}) — parallel runs skew each other's numbers`);
+    throw new Error(`already running ${active.size} test${active.size === 1 ? '' : 's'} (limit ${MAX_CONCURRENT_RUNS})`);
   }
   return launch(args.config, args.profileId, args.profileName);
 }
 
 /**
- * Queue a batch. The first entry starts immediately when nothing is running;
- * the rest wait their turn.
+ * Start every selected profile at once.
+ *
+ * One profile failing to start must not take the rest of the batch with it, so
+ * failures are collected and returned alongside what did start.
  */
-export function startBatch(
-  entries: Array<{ config: RunConfig; profileId: string | null; profileName: string }>,
-): { runId: string | null; queued: Array<{ queueId: string; profileName: string }> } {
-  for (const e of entries) {
-    if (!RUNNERS[e.config.protocol]) throw new Error(`unknown protocol ${e.config.protocol}`);
-    queue.push({ queueId: randomUUID(), profileId: e.profileId, profileName: e.profileName, config: e.config });
-  }
-  publishQueue();
+export function startBatch(entries: StartEntry[]): {
+  started: StartedRun[];
+  failed: Array<{ profileName: string; error: string }>;
+} {
+  const started: StartedRun[] = [];
+  const failed: Array<{ profileName: string; error: string }> = [];
 
-  let runId: string | null = null;
-  if (active.size < MAX_CONCURRENT_RUNS) {
-    const next = queue.shift();
-    if (next) {
-      publishQueue();
-      runId = launch(next.config, next.profileId, next.profileName);
+  for (const e of entries) {
+    try {
+      if (!RUNNERS[e.config.protocol]) throw new Error(`unknown protocol ${e.config.protocol}`);
+      const runId = startRun(e);
+      started.push({
+        runId, profileName: e.profileName, protocol: e.config.protocol, target: targetOf(e.config),
+      });
+    } catch (err) {
+      failed.push({ profileName: e.profileName, error: (err as Error).message });
     }
   }
-  return { runId, queued: queue.map((q) => ({ queueId: q.queueId, profileName: q.profileName })) };
+  return { started, failed };
 }
 
 function launch(config: RunConfig, profileId: string | null, profileName: string): string {
@@ -241,7 +198,6 @@ async function execute(runner: Runner, ctx: RunnerContext, profileName: string, 
 
   active.delete(ctx.runId);
   store.applyRetention(store.getSettings().retentionRuns);
-  startNext();
 }
 
 function minPassRate(ctx: RunnerContext, name: string): number {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Profile, RunEvent, RunState, RunSummary, WindowMetrics } from '@shared/types.ts';
+import type { Profile, Protocol, RunEvent, RunState, RunSummary, WindowMetrics } from '@shared/types.ts';
 import { api, csvUrl, type RunDetail } from '../lib/api.ts';
 import { useEventStream } from '../lib/sse.ts';
 import { compact, dateTime, duration, ms, num, pct, timeOnly } from '../lib/format.ts';
@@ -10,6 +10,56 @@ import { COLORS, TimeSeries } from '../components/TimeSeries.tsx';
 
 const MAX_LOGS = 400;
 
+/**
+ * One selected profile's run: its own timeline, logs and verdict.
+ *
+ * Runs happen side by side, so nothing here may be shared — a single set of
+ * samples would interleave two profiles into one meaningless chart.
+ */
+interface Pane {
+  runId: string;
+  profileName: string;
+  protocol: Protocol | null;
+  samples: WindowMetrics[];
+  logs: Array<{ ts: number; level: string; line: string }>;
+  summary: RunSummary | null;
+  state: RunState | null;
+  live: { requests: number; success: number; failed: number };
+  detail: RunDetail | null;
+}
+
+const NO_SAMPLES: WindowMetrics[] = [];
+const NO_LOGS: Array<{ ts: number; level: string; line: string }> = [];
+const NO_LIVE = { requests: 0, success: 0, failed: 0 };
+
+function blankPane(runId: string, profileName: string, protocol: Protocol | null): Pane {
+  return {
+    runId, profileName, protocol,
+    samples: [], logs: [], summary: null, state: 'running', live: { ...NO_LIVE }, detail: null,
+  };
+}
+
+function paneFromDetail(d: RunDetail): Pane {
+  return {
+    runId: d.id,
+    profileName: d.profileName,
+    protocol: d.protocol,
+    samples: d.samples,
+    logs: d.logs.slice(-MAX_LOGS),
+    summary: d.summary,
+    state: d.state,
+    live: d.summary
+      ? { requests: d.summary.totalRequests, success: d.summary.totalSuccess, failed: d.summary.totalFailed }
+      : d.samples.reduce(
+          (acc, w) => ({
+            requests: acc.requests + w.requests, success: acc.success + w.success, failed: acc.failed + w.failed,
+          }),
+          { ...NO_LIVE },
+        ),
+    detail: d,
+  };
+}
+
 export function RunView(props: {
   runId: string | null;
   setRunId: (id: string | null) => void;
@@ -18,86 +68,98 @@ export function RunView(props: {
 }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<string[]>([]);
-  const [queue, setQueue] = useState<Array<{ queueId: string; profileName: string }>>([]);
-  const [samples, setSamples] = useState<WindowMetrics[]>([]);
-  const [logs, setLogs] = useState<Array<{ ts: number; level: string; line: string }>>([]);
-  const [summary, setSummary] = useState<RunSummary | null>(null);
-  const [live, setLive] = useState<Partial<RunSummary> & { requests: number; success: number; failed: number }>(
-    { requests: 0, success: 0, failed: 0 },
-  );
-  const [state, setState] = useState<RunState | null>(null);
-  const [detail, setDetail] = useState<RunDetail | null>(null);
+  const [panes, setPanes] = useState<Pane[]>([]);
   const [starting, setStarting] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+
+  const pane = panes.find((p) => p.runId === props.runId) ?? null;
+  const samples = pane?.samples ?? NO_SAMPLES;
+  const logs = pane?.logs ?? NO_LOGS;
+  const summary = pane?.summary ?? null;
+  const state = pane?.state ?? null;
+  const detail = pane?.detail ?? null;
+  const live = pane?.live ?? NO_LIVE;
+  const runningCount = panes.filter((p) => p.state === 'running').length;
 
   useEffect(() => {
     if (selected.length === 0 && props.profiles.length) setSelected([props.profiles[0].id]);
   }, [props.profiles]);
 
-  useEffect(() => {
-    api.queue().then(setQueue).catch(() => setQueue([]));
-  }, []);
-
-  // Load persisted state whenever the selected run changes (history click or refresh).
-  useEffect(() => {
-    setSamples([]); setLogs([]); setSummary(null); setDetail(null); setState(null);
-    setLive({ requests: 0, success: 0, failed: 0 });
-    if (!props.runId) return;
-    let cancelled = false;
-    api.run(props.runId)
-      .then((d) => {
-        if (cancelled) return;
-        setDetail(d);
-        setSamples(d.samples);
-        setLogs(d.logs.slice(-MAX_LOGS));
-        setSummary(d.summary);
-        setState(d.state);
-        if (d.summary) {
-          setLive({
-            requests: d.summary.totalRequests,
-            success: d.summary.totalSuccess,
-            failed: d.summary.totalFailed,
-          });
-        }
-      })
-      .catch((e: Error) => props.onError(e.message));
-    return () => { cancelled = true; };
-  }, [props.runId]);
-
-  const onEvent = useCallback((ev: RunEvent) => {
-    switch (ev.t) {
-      case 'start':
-        setState('running');
-        break;
-      case 'tick':
-        setSamples((prev) => [...prev, ev.window]);
-        setLive((prev) => ({
-          requests: prev.requests + ev.window.requests,
-          success: prev.success + ev.window.success,
-          failed: prev.failed + ev.window.failed,
-        }));
-        break;
-      case 'log':
-        setLogs((prev) => [...prev, { ts: ev.ts, level: ev.level, line: ev.line }].slice(-MAX_LOGS));
-        break;
-      case 'queue':
-        setQueue(ev.pending);
-        break;
-      case 'end':
-        setSummary(ev.summary);
-        setState(ev.state);
-        setLive({
-          requests: ev.summary.totalRequests,
-          success: ev.summary.totalSuccess,
-          failed: ev.summary.totalFailed,
-        });
-        break;
-      default:
-        break;
+  /** Pull a run's persisted timeline into a tab, whether it is live or finished. */
+  const openPane = useCallback(async (runId: string): Promise<void> => {
+    try {
+      const d = await api.run(runId);
+      setPanes((prev) => (prev.some((p) => p.runId === runId)
+        ? prev.map((p) => (p.runId === runId ? paneFromDetail(d) : p))
+        : [...prev, paneFromDetail(d)]));
+    } catch (e) {
+      props.onError((e as Error).message);
     }
   }, []);
 
-  const conn = useEventStream(props.runId, onEvent);
+  // A reload mid-test must come back to every run still in flight, not just
+  // whichever one the URL happened to hold.
+  useEffect(() => {
+    api.activeRuns()
+      .then((rs) => Promise.all(rs.map((r) => openPane(r.runId))))
+      .catch(() => { /* nothing running */ });
+  }, [openPane]);
+
+  // A run picked from history opens as its own tab.
+  useEffect(() => {
+    if (props.runId && !panes.some((p) => p.runId === props.runId)) void openPane(props.runId);
+  }, [props.runId, panes, openPane]);
+
+  // The stream carries every run at once, so each event is filed under the tab
+  // it belongs to. Events for runs with no tab open are not ours to show.
+  const onEvent = useCallback((ev: RunEvent) => {
+    if (ev.t === 'kafka-monitor' || !ev.runId) return;
+    const runId = ev.runId;
+    setPanes((prev) => {
+      const i = prev.findIndex((p) => p.runId === runId);
+      if (i < 0) return prev;
+      const p = prev[i];
+      let next = p;
+      switch (ev.t) {
+        case 'start':
+          next = { ...p, state: 'running' };
+          break;
+        case 'tick':
+          next = {
+            ...p,
+            samples: [...p.samples, ev.window],
+            live: {
+              requests: p.live.requests + ev.window.requests,
+              success: p.live.success + ev.window.success,
+              failed: p.live.failed + ev.window.failed,
+            },
+          };
+          break;
+        case 'log':
+          next = { ...p, logs: [...p.logs, { ts: ev.ts, level: ev.level, line: ev.line }].slice(-MAX_LOGS) };
+          break;
+        case 'end':
+          next = {
+            ...p,
+            summary: ev.summary,
+            state: ev.state,
+            live: {
+              requests: ev.summary.totalRequests,
+              success: ev.summary.totalSuccess,
+              failed: ev.summary.totalFailed,
+            },
+          };
+          break;
+        default:
+          return prev;
+      }
+      const copy = [...prev];
+      copy[i] = next;
+      return copy;
+    });
+  }, []);
+
+  const conn = useEventStream(null, onEvent);
   const isRunning = state === 'running';
 
   useEffect(() => {
@@ -109,8 +171,17 @@ export function RunView(props: {
     setStarting(true);
     try {
       const res = await api.startRun({ profileIds: selected });
-      setQueue(res.queued);
-      if (res.runId) props.setRunId(res.runId);
+      // Finished tabs for the same profiles stay out of the way: a new run of a
+      // profile replaces its previous tab rather than piling up.
+      setPanes((prev) => {
+        const names = new Set(res.runs.map((r) => r.profileName));
+        const kept = prev.filter((p) => p.state === 'running' || !names.has(p.profileName));
+        return [...kept, ...res.runs.map((r) => blankPane(r.runId, r.profileName, r.protocol))];
+      });
+      if (res.runs[0]) props.setRunId(res.runs[0].runId);
+      if (res.failed.length) {
+        props.onError(`${t('errors.runFailed')}: ${res.failed.map((f) => `${f.profileName} — ${f.error}`).join(' · ')}`);
+      }
     } catch (e) {
       props.onError(`${t('errors.runFailed')}: ${(e as Error).message}`);
     } finally {
@@ -125,6 +196,22 @@ export function RunView(props: {
   const stop = async (): Promise<void> => {
     if (!props.runId) return;
     try { await api.stopRun(props.runId); } catch (e) { props.onError((e as Error).message); }
+  };
+
+  const stopAll = async (): Promise<void> => {
+    const running = panes.filter((p) => p.state === 'running');
+    const results = await Promise.allSettled(running.map((p) => api.stopRun(p.runId)));
+    const failed = results.filter((r) => r.status === 'rejected');
+    if (failed.length) props.onError(`${t('run.stopAll')}: ${failed.length}/${running.length}`);
+  };
+
+  /** Close a tab. A run still in flight keeps going — closing is not stopping. */
+  const closePane = (runId: string): void => {
+    setPanes((prev) => {
+      const next = prev.filter((p) => p.runId !== runId);
+      if (runId === props.runId) props.setRunId(next.length ? next[next.length - 1].runId : null);
+      return next;
+    });
   };
 
   const latest = samples.length ? samples[samples.length - 1] : null;
@@ -178,20 +265,22 @@ export function RunView(props: {
             <div className="panel-body ctl-bar">
               <span className={`dot ${conn === 'live' ? 'live' : conn === 'down' ? 'dead' : ''}`} />
               <span className="badge badge-info">{t('run.nSelected', { count: selected.length })}</span>
-              {queue.length ? (
-                <span className="badge badge-warn">{t('run.queued', { count: queue.length })}</span>
+              {runningCount ? (
+                <span className="badge badge-warn">{t('run.nRunning', { count: runningCount })}</span>
               ) : null}
               <span className="grow" />
               {state ? <Badge tone={stateTone(state)}>{t(`run.states.${state}`)}</Badge> : null}
+              <button
+                className="btn btn-primary"
+                disabled={selected.length === 0 || starting}
+                onClick={() => void start()}
+              >▶ {t('common.start')}</button>
               {isRunning ? (
                 <button className="btn btn-danger" onClick={() => void stop()}>■ {t('common.stop')}</button>
-              ) : (
-                <button
-                  className="btn btn-primary"
-                  disabled={selected.length === 0 || starting}
-                  onClick={() => void start()}
-                >▶ {t('common.start')}</button>
-              )}
+              ) : null}
+              {runningCount > 1 ? (
+                <button className="btn btn-danger" onClick={() => void stopAll()}>■■ {t('run.stopAll')}</button>
+              ) : null}
               {summary ? (
                 <a className="btn" href={csvUrl(`/api/runs/${props.runId}/export.csv`, { type: 'all' })} download>
                   ⇩ {t('common.export')}
@@ -203,14 +292,14 @@ export function RunView(props: {
       </div>
 
       <div className="grid" style={{ marginBottom: 10 }}>
-        <div className={queue.length ? 'col-8' : 'col-12'}>
+        <div className="col-12">
           <Panel
             title={t('run.selectProfiles')}
             actions={
               <>
-                <button className="btn btn-sm" disabled={isRunning}
+                <button className="btn btn-sm"
                   onClick={() => setSelected(props.profiles.map((p) => p.id))}>{t('run.selectAll')}</button>
-                <button className="btn btn-sm" disabled={isRunning || selected.length === 0}
+                <button className="btn btn-sm" disabled={selected.length === 0}
                   onClick={() => setSelected([])}>{t('run.selectNone')}</button>
               </>
             }
@@ -223,7 +312,6 @@ export function RunView(props: {
                       type="checkbox"
                       className="checkbox"
                       checked={selected.includes(p.id)}
-                      disabled={isRunning}
                       onChange={() => toggleProfile(p.id)}
                     />
                     <span className="pick-name">{p.name}</span>
@@ -232,41 +320,39 @@ export function RunView(props: {
                 ))}
               </div>
             )}
-            <div className="field-hint" style={{ marginTop: 6 }}>{t('run.runsSequentially')}</div>
+            <div className="field-hint" style={{ marginTop: 6 }}>{t('run.runsConcurrently')}</div>
           </Panel>
         </div>
 
-        {queue.length ? (
-          <div className="col-4">
-            <Panel
-              title={t('run.queue')}
-              actions={
-                <button className="btn btn-sm" onClick={() => { void api.clearQueue().then(() => setQueue([])); }}>
-                  {t('run.clearQueue')}
-                </button>
-              }
-              flush
-            >
-              <div className="tbl-wrap">
-                <table>
-                  <tbody>
-                    {queue.map((q, i) => (
-                      <tr key={q.queueId}>
-                        <td style={{ width: 26 }} className="stat-sub">{i + 1}</td>
-                        <td>{q.profileName}</td>
-                        <td className="r">
-                          <button className="btn btn-sm" title={t('common.remove')}
-                            onClick={() => { void api.dequeue(q.queueId).then(() => setQueue((v) => v.filter((x) => x.queueId !== q.queueId))); }}>✕</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
-          </div>
-        ) : null}
       </div>
+
+      {panes.length ? (
+        <div className="run-tabs" role="tablist">
+          {panes.map((p) => (
+            <div
+              key={p.runId}
+              role="tab"
+              tabIndex={0}
+              aria-selected={p.runId === props.runId}
+              className={`run-tab${p.runId === props.runId ? ' on' : ''}`}
+              onClick={() => props.setRunId(p.runId)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') props.setRunId(p.runId); }}
+            >
+              <span className={`dot ${p.state === 'running' ? 'live' : ''}`} />
+              <span className="run-tab-name" title={p.profileName}>{p.profileName}</span>
+              {p.state && p.state !== 'running'
+                ? <Badge tone={stateTone(p.state)}>{t(`run.states.${p.state}`)}</Badge>
+                : null}
+              <button
+                className="run-tab-x"
+                title={t('run.closeTab')}
+                aria-label={t('run.closeTab')}
+                onClick={(e) => { e.stopPropagation(); closePane(p.runId); }}
+              >✕</button>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {!props.runId ? <Empty text={t('run.noRun')} /> : null}
 

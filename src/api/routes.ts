@@ -8,7 +8,7 @@ import {
 } from '../shared/defaults.ts';
 import { METRICS } from '../metrics/thresholds.ts';
 import {
-  activeRuns, availability, clearQueue, dequeue, queuedRuns, startBatch, startRun, stopRun, targetOf,
+  activeRuns, availability, startBatch, stopRun, targetOf,
 } from '../runners/manager.ts';
 import { ingestArtilleryReport } from '../runners/artillery.runner.ts';
 import { monitorStatus, startMonitor, stopMonitor } from '../kafka/monitor.ts';
@@ -160,8 +160,8 @@ export function registerRoutes(app: FastifyInstance): void {
       profileId?: string; profileIds?: string[]; profileName?: string; config?: unknown;
     };
 
-    // One profile, several profiles, or an ad-hoc config. Several profiles run
-    // in sequence — see startBatch.
+    // One profile, several profiles, or an ad-hoc config. Several profiles all
+    // start at once — see startBatch.
     const ids = body.profileIds?.length ? body.profileIds : body.profileId ? [body.profileId] : [];
     const entries: Array<{ config: RunConfig; profileId: string | null; profileName: string }> = [];
 
@@ -185,8 +185,8 @@ export function registerRoutes(app: FastifyInstance): void {
       });
     }
 
-    // Check every runner up front: queueing a batch that cannot finish is worse
-    // than refusing it.
+    // Check every runner up front: half-starting a batch is worse than
+    // refusing it.
     const avail = await availability();
     for (const e of entries) {
       const cap = avail[e.config.protocol];
@@ -195,24 +195,12 @@ export function registerRoutes(app: FastifyInstance): void {
       }
     }
 
-    try {
-      if (entries.length === 1) {
-        const only = entries[0];
-        const runId = startRun(only);
-        return { runId, target: targetOf(only.config), queued: [] };
-      }
-      const res = startBatch(entries);
-      return { runId: res.runId, target: entries[0] ? targetOf(entries[0].config) : '', queued: res.queued };
-    } catch (err) {
-      return reply.code(409).send({ error: (err as Error).message });
+    const { started, failed } = startBatch(entries);
+    // Nothing started at all is a failed request, not a partial success.
+    if (started.length === 0) {
+      return reply.code(409).send({ error: failed[0]?.error ?? 'no run could be started', failed });
     }
-  });
-
-  app.get('/api/runs/queue', async () => queuedRuns());
-  app.delete('/api/runs/queue', async () => ({ removed: clearQueue() }));
-  app.delete('/api/runs/queue/:queueId', async (req, reply) => {
-    const ok = dequeue((req.params as { queueId: string }).queueId);
-    return ok ? { ok: true } : reply.code(404).send({ error: 'not queued' });
+    return { runs: started, failed };
   });
 
   app.get('/api/runs/active', async () => activeRuns());

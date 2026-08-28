@@ -596,3 +596,44 @@ pre.logs { white-space: pre; }
 .uplot, .u-wrap { width: 100% !important; }
 .u-legend { font-size: 11px; }
 .u-legend .u-marker { width: 10px; height: 10px; }
+
+/* ── Run tabs ─────────────────────────────────────────────────────────────
+   One tab per profile in flight. Each tab owns its own charts: overlaying two
+   profiles on one timeline would average away the thing being measured. */
+.run-tabs {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+.run-tab {
+  display: flex; align-items: center; gap: 6px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px 4px 0 0;
+  background: var(--panel-alt);
+  color: var(--text-weak);
+  cursor: pointer;
+  font-size: 12px;
+}
+.run-tab:hover { color: var(--text); border-color: var(--border-strong); }
+.run-tab.on {
+  background: var(--panel);
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.run-tab-name {
+  max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.run-tab-x {
+  background: none; border: 0; padding: 0 2px;
+  color: var(--text-faint); cursor: pointer; font-size: 11px; line-height: 1;
+}
+.run-tab-x:hover { color: var(--red); }
+
+@media (max-width: 700px) {
+  .run-tab-name { max-width: 120px; }
+}

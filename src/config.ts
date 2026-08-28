@@ -10,7 +10,14 @@ export const PORT = Number.parseInt(process.env.DASHBOARD_PORT ?? '4300', 10);
 export const BIND = process.env.DASHBOARD_BIND ?? '127.0.0.1';
 export const TOKEN = process.env.DASHBOARD_TOKEN ?? '';
 export const DATA_DIR = resolve(process.env.DASHBOARD_DATA_DIR ?? './data');
-export const MAX_CONCURRENT_RUNS = Number.parseInt(process.env.DASHBOARD_MAX_RUNS ?? '1', 10);
+/**
+ * Selected profiles start together. They share this host, so their latency
+ * figures do influence each other — the ceiling is here to keep a careless
+ * selection from spawning more load generators than the machine can drive.
+ */
+export const MAX_CONCURRENT_RUNS = Math.max(
+  1, Number.parseInt(process.env.DASHBOARD_MAX_RUNS ?? '8', 10) || 8,
+);
 
 /**
  * This service spawns processes and generates traffic. Exposing it off-loopback

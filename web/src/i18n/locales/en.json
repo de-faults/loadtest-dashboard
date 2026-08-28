@@ -111,13 +111,13 @@
       "queued": "Queued"
     },
     "selectProfiles": "Profiles to run",
-    "queue": "Queue",
-    "queued": "{{count}} queued",
-    "clearQueue": "Clear queue",
-    "runsSequentially": "Profiles run one after another — concurrent runs skew each other\\u2019s numbers.",
     "selectAll": "Select all",
     "selectNone": "Clear selection",
-    "nSelected": "{{count}} selected"
+    "nSelected": "{{count}} selected",
+    "nRunning": "{{count}} running",
+    "stopAll": "Stop all",
+    "closeTab": "Close this tab (the run keeps going)",
+    "runsConcurrently": "Selected profiles all start at once and share this machine — their latency figures do affect each other."
   },
   "config": {
     "title": "Test profiles",
