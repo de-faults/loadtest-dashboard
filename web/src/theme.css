@@ -637,3 +637,39 @@ pre.logs { white-space: pre; }
 @media (max-width: 700px) {
   .run-tab-name { max-width: 120px; }
 }
+
+/* ── Inline reference block ───────────────────────────────────────────────
+   Folded away by default: it is documentation, not part of the form. */
+.doc-block {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-alt);
+  font-size: 12px;
+}
+.doc-block > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-weak);
+  user-select: none;
+}
+.doc-block > summary:hover { color: var(--text); }
+.doc-block[open] > summary { border-bottom: 1px solid var(--border); color: var(--text); }
+.doc-block > *:not(summary) { margin: 8px 10px; }
+.doc-line { color: var(--text-weak); line-height: 1.6; }
+.doc-block code {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--text);
+}
+.doc-block table { font-size: 12px; }
+.pill-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  color: var(--text-weak);
+  cursor: pointer;
+}
+.pill-btn:hover { color: var(--text); border-color: var(--accent); }

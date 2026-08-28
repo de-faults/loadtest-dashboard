@@ -228,7 +228,32 @@
     "probeRunning": "Connecting…",
     "probeOk": "Verified",
     "probeFailed": "Failed",
-    "probeHint": "Opens one connection, sends the flow's first message, and shows the reply."
+    "probeHint": "Opens one connection, sends the flow's first message, and shows the reply.",
+    "thresholdDocTitle": "How to write a threshold",
+    "thresholdDocForm": "metric  operator  number      — one per line",
+    "thresholdDocOps": "Operators:",
+    "thresholdDocMetric": "Metric",
+    "thresholdDocUnit": "Unit",
+    "thresholdDocMeaning": "Measures",
+    "thresholdDocExamples": "Common thresholds — click one to add it:",
+    "thresholdDocInsert": "Add this threshold",
+    "thresholdDocInvalid": "A line that names an unknown metric fails the run instead of being skipped, so a typo can never quietly pass.",
+    "thresholdDocK6": "For REST profiles, latency, error-rate and rps thresholds are also given to k6 itself, so k6's own verdict agrees with the dashboard's. The rest are evaluated here.",
+    "thresholdMetric": {
+      "min": "Fastest response",
+      "avg": "Mean response time",
+      "p90": "90% of responses were faster than this",
+      "p95": "95% of responses were faster than this",
+      "p99": "99% of responses were faster than this",
+      "max": "Slowest response",
+      "rps": "Requests per second, averaged over the run",
+      "tps": "Transactions (whole iterations) per second",
+      "vus": "Peak concurrent virtual users",
+      "success_rate": "Share of requests that succeeded",
+      "error_rate": "Share of requests that failed",
+      "total_requests": "Requests sent in the whole run",
+      "duration_s": "How long the run took"
+    }
   },
   "history": {
     "title": "Run history",

@@ -228,7 +228,32 @@
     "probeRunning": "กำลังเชื่อมต่อ…",
     "probeOk": "ต่อได้",
     "probeFailed": "ไม่สำเร็จ",
-    "probeHint": "เปิดการเชื่อมต่อ 1 ครั้ง ส่งข้อความแรกของ flow แล้วแสดงสิ่งที่ตอบกลับมา"
+    "probeHint": "เปิดการเชื่อมต่อ 1 ครั้ง ส่งข้อความแรกของ flow แล้วแสดงสิ่งที่ตอบกลับมา",
+    "thresholdDocTitle": "เขียน threshold ยังไง",
+    "thresholdDocForm": "metric  ตัวดำเนินการ  ตัวเลข      — บรรทัดละ 1 เงื่อนไข",
+    "thresholdDocOps": "ตัวดำเนินการ:",
+    "thresholdDocMetric": "Metric",
+    "thresholdDocUnit": "หน่วย",
+    "thresholdDocMeaning": "วัดอะไร",
+    "thresholdDocExamples": "เงื่อนไขที่ใช้บ่อย — คลิกเพื่อเพิ่ม:",
+    "thresholdDocInsert": "เพิ่มเงื่อนไขนี้",
+    "thresholdDocInvalid": "บรรทัดที่ใช้ metric ที่ไม่รู้จักจะทำให้ run ไม่ผ่าน ไม่ใช่ข้ามไปเฉย ๆ พิมพ์ผิดจึงไม่มีทางผ่านแบบเงียบ ๆ",
+    "thresholdDocK6": "โปรไฟล์ REST: เงื่อนไข latency, error_rate และ rps จะถูกส่งให้ k6 ด้วย ผลตัดสินของ k6 จึงตรงกับของ dashboard ส่วนที่เหลือคำนวณที่ dashboard",
+    "thresholdMetric": {
+      "min": "ตอบกลับเร็วที่สุด",
+      "avg": "เวลาตอบกลับเฉลี่ย",
+      "p90": "90% ของ request เร็วกว่าค่านี้",
+      "p95": "95% ของ request เร็วกว่าค่านี้",
+      "p99": "99% ของ request เร็วกว่าค่านี้",
+      "max": "ตอบกลับช้าที่สุด",
+      "rps": "request ต่อวินาที เฉลี่ยทั้ง run",
+      "tps": "transaction (ทั้ง iteration) ต่อวินาที",
+      "vus": "virtual user พร้อมกันสูงสุด",
+      "success_rate": "สัดส่วน request ที่สำเร็จ",
+      "error_rate": "สัดส่วน request ที่ล้มเหลว",
+      "total_requests": "จำนวน request ทั้งหมดใน run",
+      "duration_s": "ระยะเวลาที่ run ใช้ไป"
+    }
   },
   "history": {
     "title": "ประวัติการทดสอบ",

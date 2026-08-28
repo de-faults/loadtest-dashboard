@@ -25,6 +25,7 @@ export function ConfigView(props: {
   const [hints, setHints] = useState<string[]>([]);
   const [headerHints, setHeaderHints] = useState<string[]>([]);
   const [headerValueHints, setHeaderValueHints] = useState<Record<string, string[]>>({});
+  const [metrics, setMetrics] = useState<string[]>([]);
 
   useEffect(() => {
     api.meta()
@@ -32,6 +33,7 @@ export function ConfigView(props: {
         setHints(m.librdkafkaHints);
         setHeaderHints(m.headerHints ?? []);
         setHeaderValueHints(m.headerValueHints ?? {});
+        setMetrics(m.metrics ?? []);
       })
       .catch(() => { setHints([]); setHeaderHints([]); });
   }, []);
@@ -192,6 +194,14 @@ export function ConfigView(props: {
               onChange={(text) => patchConfig({
                 thresholds: text.split('\n').map((s) => s.trim()).filter(Boolean).map((expr) => ({ expr })),
               })}
+            />
+            <ThresholdDoc
+              protocol={editing.protocol}
+              metrics={metrics}
+              onInsert={(expr) => {
+                if (editing.config.thresholds.some((x) => x.expr === expr)) return;
+                patchConfig({ thresholds: [...editing.config.thresholds, { expr }] });
+              }}
             />
           </Panel>
         )}
@@ -783,5 +793,94 @@ function ChecksForm({ protocol, checks, onChange }: {
         }])}
       >+ {t('common.add')}</button>
     </>
+  );
+}
+
+// ─── Thresholds reference ────────────────────────────────────────────────────
+
+/** Unit per metric. The metric list itself is whatever the server accepts. */
+const THRESHOLD_UNITS: Record<string, string> = {
+  min: 'ms', avg: 'ms', p90: 'ms', p95: 'ms', p99: 'ms', max: 'ms',
+  rps: 'req/s', tps: 'tx/s', vus: '', success_rate: '%', error_rate: '%',
+  total_requests: '', duration_s: 's',
+};
+
+const THRESHOLD_EXAMPLES = [
+  'p95 < 500',
+  'p99 <= 1000',
+  'success_rate > 99',
+  'error_rate < 1',
+  'rps > 1000',
+  'max < 5000',
+];
+
+/**
+ * What can be written in the thresholds box, next to the box.
+ *
+ * The expression language is small but it is invented here, so nothing about
+ * it is guessable: which metrics exist, what unit each is in, and that an
+ * unrecognised line fails the run rather than being skipped.
+ */
+function ThresholdDoc({ protocol, metrics, onInsert }: {
+  protocol: Protocol;
+  /** Straight from the server's parser, so the list cannot go stale. */
+  metrics: string[];
+  onInsert: (expr: string) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const rows = (metrics.length ? metrics : Object.keys(THRESHOLD_UNITS));
+  return (
+    <details className="doc-block">
+      <summary>{t('config.thresholdDocTitle')}</summary>
+
+      <p className="doc-line">
+        <code>{t('config.thresholdDocForm')}</code>
+      </p>
+      <p className="doc-line">
+        {t('config.thresholdDocOps')} <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code>{' '}
+        <code>&gt;=</code> <code>==</code> <code>!=</code>
+      </p>
+
+      <div className="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>{t('config.thresholdDocMetric')}</th>
+              <th>{t('config.thresholdDocUnit')}</th>
+              <th>{t('config.thresholdDocMeaning')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((name) => {
+              const key = `config.thresholdMetric.${name}`;
+              return (
+                <tr key={name}>
+                  <td className="mono">{name}</td>
+                  <td className="stat-sub">{THRESHOLD_UNITS[name] || '—'}</td>
+                  {/* A metric the server gained but this table has no wording
+                      for still appears, rather than going unmentioned. */}
+                  <td>{i18n.exists(key) ? t(key) : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="doc-line">{t('config.thresholdDocExamples')}</div>
+      <div className="pills">
+        {THRESHOLD_EXAMPLES.map((e) => (
+          <button key={e} type="button" className="pill pill-btn"
+            title={t('config.thresholdDocInsert')} onClick={() => onInsert(e)}>
+            + <span className="mono">{e}</span>
+          </button>
+        ))}
+      </div>
+
+      <p className="doc-line">{t('config.thresholdDocInvalid')}</p>
+      {protocol === 'rest' ? (
+        <p className="doc-line">{t('config.thresholdDocK6')}</p>
+      ) : null}
+    </details>
   );
 }
