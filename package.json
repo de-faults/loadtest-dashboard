@@ -16,7 +16,8 @@
     "check:i18n": "node scripts/check-i18n.mjs",
     "target:http": "node tools/http-target.mjs",
     "target:ws": "node tools/ws-echo-target.mjs",
-    "target:socketio": "node tools/socketio-target.mjs"
+    "target:socketio": "node tools/socketio-target.mjs",
+    "target:socketio-flaky": "node tools/flaky-socketio-target.mjs"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

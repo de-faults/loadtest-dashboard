@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
 import { getSettings } from '../store/db.ts';
 import { PORT } from '../config.ts';
@@ -13,6 +13,7 @@ import type { SocketConfig, SocketFlowStep } from '../shared/types.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = join(HERE, 'assets');
+const SOCKETIO_GUARD = join(PLUGIN_DIR, 'artillery-socketio-guard.mjs');
 
 /** Interim stats posted by artillery-plugin-ltd-publish. */
 export interface ArtilleryReport {
@@ -69,13 +70,19 @@ export const artilleryRunner: Runner = {
     // yaml.stringify, never string templating — user input must not be able to
     // break out of a scalar and inject YAML structure.
     let runScript = scriptPath;
+    // Total scripted phase time, used by the stall watchdog below. Zero means
+    // "unknown", and an unknown-length script is never killed.
+    let phasesSec = 0;
+    let scenarioBudgetSec = 0;
     if (usesCustomScript(ctx.config.script)) {
       const userScript = await materializeScript(ctx.config.script, dir, 'script.yml');
       // Re-emit their YAML with our live-stats plugin merged in, so custom
       // scripts still stream to the charts instead of only reporting at the end.
       const merged = await injectPlugin(userScript, ctx.runId);
       if (merged) {
-        await writeFile(scriptPath, merged, 'utf8');
+        await writeFile(scriptPath, merged.yaml, 'utf8');
+        phasesSec = merged.phasesSec;
+        scenarioBudgetSec = merged.scenarioSec;
         ctx.log('info', `custom artillery script: ${userScript}`);
       } else {
         runScript = userScript;
@@ -83,6 +90,13 @@ export const artilleryRunner: Runner = {
       }
     } else {
       await writeFile(scriptPath, yamlStringify(buildScript(cfg, ctx.runId)), 'utf8');
+      phasesSec = cfg.phases.reduce((sum, p) => sum + (p.durationSec || 0), 0);
+      scenarioBudgetSec = flowBudgetSec(
+        cfg.flow.map((step) => ({
+          think: step.kind === 'think' ? Number(step.value) || 0 : 0,
+          waits: step.kind === 'expect' || (step.kind === 'emit' && step.acknowledge === true),
+        })),
+      );
     }
     const state: IngestState = { ctx, created: 0, finished: 0 };
     ingest.set(ctx.runId, state);
@@ -94,20 +108,70 @@ export const artilleryRunner: Runner = {
     const child = spawn(bin, args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, ARTILLERY_PLUGIN_PATH: PLUGIN_DIR, ARTILLERY_DISABLE_TELEMETRY: 'true' },
+      env: {
+        ...process.env,
+        ARTILLERY_PLUGIN_PATH: PLUGIN_DIR,
+        ARTILLERY_DISABLE_TELEMETRY: 'true',
+        // Inherited by artillery's worker processes, which is where the engine
+        // actually runs — see the guard's own comment for what it fixes.
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import "${pathToFileURL(SOCKETIO_GUARD).href}"`.trim(),
+        ...(bin.includes('/') ? { LTD_ARTILLERY_MAIN: bin } : {}),
+      },
     });
 
     const onAbort = () => { child.kill('SIGINT'); };
     ctx.signal.addEventListener('abort', onAbort, { once: true });
 
-    child.stdout.on('data', (b: Buffer) => splitLines(b).forEach((l) => ctx.log('info', l)));
-    child.stderr.on('data', (b: Buffer) => splitLines(b).forEach((l) => ctx.log('warn', l)));
+    // A dead worker takes its virtual users and the final report with it, so
+    // the run must say that plainly rather than reporting a short test.
+    let workerDied = false;
+    const watchLine = (line: string): void => {
+      if (workerDied || !/^worker error|Callback was already called/.test(line)) return;
+      workerDied = true;
+      ctx.error('artillery-worker', line.trim());
+      ctx.log('error',
+        'an artillery worker crashed — the virtual users it was running stopped early. '
+        + 'This usually follows a connection dropped by the target mid-scenario.');
+    };
+
+    child.stdout.on('data', (b: Buffer) => splitLines(b).forEach((l) => { ctx.log('info', l); watchLine(l); }));
+    child.stderr.on('data', (b: Buffer) => splitLines(b).forEach((l) => { ctx.log('warn', l); watchLine(l); }));
+
+    /**
+     * Stall watchdog.
+     *
+     * A Socket.IO `emit` that waits for an acknowledgement has no timeout in
+     * artillery's engine: if the ack never arrives — the target dropped the
+     * connection, or simply never answered — that virtual user's scenario never
+     * ends and artillery waits for it forever. Without this, a 30-second test
+     * sits "running" indefinitely and writes no report.
+     */
+    let stalled = false;
+    let exited = false;
+    // Virtual users created in the final second still have their whole scenario
+    // to run — think time included — so that budget is added to the grace period
+    // rather than being mistaken for a stall.
+    const graceSec = Math.max(60, Math.round(phasesSec * 0.25)) + scenarioBudgetSec;
+    const watchdog = phasesSec > 0
+      ? setTimeout(() => {
+          if (exited) return;
+          stalled = true;
+          ctx.error('artillery-stalled', `no exit ${graceSec}s after the last phase ended`);
+          ctx.log('error',
+            `artillery is still running ${graceSec}s after its ${phasesSec}s of phases ended and is being stopped. `
+            + 'A virtual user is most likely waiting on an acknowledgement that never arrived.');
+          child.kill('SIGINT');
+          setTimeout(() => { if (!exited) child.kill('SIGKILL'); }, 10_000).unref();
+        }, (phasesSec + graceSec) * 1000)
+      : null;
+    watchdog?.unref();
 
     const exitCode = await new Promise<number | null>((resolve) => {
-      child.on('close', resolve);
-      child.on('error', (err) => { ctx.error('spawn', `${bin}: ${err.message}`); resolve(null); });
+      child.on('close', (code) => { exited = true; resolve(code); });
+      child.on('error', (err) => { exited = true; ctx.error('spawn', `${bin}: ${err.message}`); resolve(null); });
     });
 
+    if (watchdog) clearTimeout(watchdog);
     ctx.signal.removeEventListener('abort', onAbort);
     ingest.delete(ctx.runId);
 
@@ -117,7 +181,12 @@ export const artilleryRunner: Runner = {
       // Only used when the plugin never reached us; otherwise it would double-count.
       if (raw.aggregate && ctx.agg.totalRequests === 0) applyReport(state, raw.aggregate);
     } catch {
-      ctx.log('warn', 'artillery report file unreadable');
+      // Say what it means for the numbers, not just that a file was missing.
+      ctx.log('warn', stalled
+        ? 'artillery wrote no final report because it had to be stopped — the figures shown come from the metrics streamed while it ran'
+        : ctx.agg.totalRequests > 0
+          ? 'artillery wrote no final report — the figures shown come from the metrics streamed while it ran'
+          : 'artillery wrote no final report and streamed no metrics — this run has no results');
     }
 
     await rm(dir, { recursive: true, force: true });
@@ -130,17 +199,41 @@ export const artilleryRunner: Runner = {
  * Returns null when the file is not parseable YAML, so the caller can fall back
  * to running it untouched rather than failing the run.
  */
-async function injectPlugin(file: string, runId: string): Promise<string | null> {
+async function injectPlugin(
+  file: string, runId: string,
+): Promise<{ yaml: string; phasesSec: number; scenarioSec: number } | null> {
   try {
     const doc = yamlParse(await readFile(file, 'utf8')) as Record<string, unknown> | null;
     if (!doc || typeof doc !== 'object') return null;
     const config = (doc.config ??= {}) as Record<string, unknown>;
     const plugins = (config.plugins ??= {}) as Record<string, unknown>;
     plugins['ltd-publish'] = { url: `http://127.0.0.1:${PORT}/_ingest/artillery/${runId}`, runId };
-    return yamlStringify(doc);
+    const phases = Array.isArray(config.phases) ? config.phases as Array<Record<string, unknown>> : [];
+    const phasesSec = phases.reduce((sum, ph) => sum + (Number(ph.duration) || 0), 0);
+
+    const scenarios = Array.isArray(doc.scenarios) ? doc.scenarios as Array<Record<string, unknown>> : [];
+    const scenarioSec = Math.max(0, ...scenarios.map((sc) => {
+      const flow = Array.isArray(sc.flow) ? sc.flow as Array<Record<string, unknown>> : [];
+      return flowBudgetSec(flow.map((step) => ({
+        think: Number(step.think) || 0,
+        waits: 'response' in step || Boolean((step.emit as { acknowledge?: unknown } | undefined)?.acknowledge)
+          || 'acknowledge' in step,
+      })));
+    }));
+    return { yaml: yamlStringify(doc), phasesSec, scenarioSec };
   } catch {
     return null;
   }
+}
+
+/**
+ * Longest a single virtual user may legitimately take: its think time plus the
+ * engine's own 10s timeout for every step that waits on the server.
+ */
+function flowBudgetSec(steps: Array<{ think: number; waits: boolean }>): number {
+  const think = steps.reduce((sum, s) => sum + s.think, 0);
+  const waits = steps.filter((s) => s.waits).length * 10;
+  return Math.min(think + waits, 3600);
 }
 
 function splitLines(b: Buffer): string[] {
