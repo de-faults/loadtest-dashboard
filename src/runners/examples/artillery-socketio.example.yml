@@ -1,0 +1,37 @@
+# Custom Artillery script for the Socket.IO engine. Runs in Artillery's own
+# engine — see https://www.artillery.io/docs/reference/engines/socketio
+#
+# The dashboard injects its `ltd-publish` plugin into config.plugins at run time
+# so the live charts keep working — you do not need to add it yourself, and any
+# plugins you declare here are preserved.
+#
+# Target: `npm run target:socketio` (tools/socketio-target.mjs) — it acks every
+# "order.create" with { status: "ok", id, echo } and also pushes an
+# "order.created" event, so both the acknowledge and listen paths work.
+config:
+  target: "http://127.0.0.1:4396"
+  phases:
+    - name: warmup
+      duration: 10
+      arrivalRate: 5
+    - name: ramp
+      duration: 20
+      arrivalRate: 5
+      rampTo: 40
+  socketio:
+    transports: ["websocket"]
+
+scenarios:
+  - engine: socketio
+    name: order-create
+    flow:
+      # Send a message and wait for its acknowledgement, asserting on the
+      # ack payload — Artillery's documented emit + acknowledge pattern.
+      - emit:
+          channel: "order.create"
+          data: { sku: "abc-123", qty: 1 }
+        acknowledge:
+          match:
+            json: "$.0.status"
+            value: "ok"
+      - think: 1

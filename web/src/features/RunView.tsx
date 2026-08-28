@@ -522,6 +522,35 @@ export function RunView(props: {
               </div>
             ) : null}
 
+            {summary?.customMetrics?.length ? (
+              <div className="col-6">
+                <Panel title={t('run.customMetrics')} flush>
+                  <div className="tbl-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>{t('common.name')}</th>
+                          <th>{t('run.type')}</th>
+                          <th>{t('run.key')}</th>
+                          <th className="r">{t('run.value')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {summary.customMetrics.flatMap((m) => Object.entries(m.values).map(([key, value]) => (
+                          <tr key={`${m.name}-${key}`}>
+                            <td className="mono">{m.name}</td>
+                            <td>{m.type}</td>
+                            <td>{key}</td>
+                            <td className="r">{num(value, Number.isInteger(value) ? 0 : 4)}</td>
+                          </tr>
+                        )))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Panel>
+              </div>
+            ) : null}
+
             <div className={summary?.errors.length ? 'col-6' : 'col-12'}>
               <Panel title={t('run.logs')}>
                 <div className="logs" ref={logRef}>

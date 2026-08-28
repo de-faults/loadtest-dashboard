@@ -1,19 +1,19 @@
-import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
-import { getSettings } from '../store/db.ts';
-import { PORT } from '../config.ts';
-import { probe } from './k6.runner.ts';
-import { materializeScript, usesCustomScript } from './script.ts';
-import type { Runner, RunnerContext, RunnerResult } from './types.ts';
-import type { SocketConfig, SocketFlowStep } from '../shared/types.ts';
+import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { getSettings } from "../store/db.ts";
+import { PORT } from "../config.ts";
+import { probe } from "./k6.runner.ts";
+import { materializeScript, usesCustomScript } from "./script.ts";
+import type { Runner, RunnerContext, RunnerResult } from "./types.ts";
+import type { SocketConfig, SocketFlowStep } from "../shared/types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const PLUGIN_DIR = join(HERE, 'assets');
-const SOCKETIO_GUARD = join(PLUGIN_DIR, 'artillery-socketio-guard.mjs');
+const PLUGIN_DIR = join(HERE, "assets");
+const SOCKETIO_GUARD = join(PLUGIN_DIR, "artillery-socketio-guard.mjs");
 
 /** Interim stats posted by artillery-plugin-ltd-publish. */
 export interface ArtilleryReport {
@@ -41,33 +41,127 @@ interface IngestState {
   sawRtt?: boolean;
   /** Last tick that carried real work — messages sent, or virtual users ending. */
   lastProgressAt?: number;
+  /** Wall-clock time of the previous report, so the next one knows how many seconds it spans. */
+  lastReportAt: number;
+  /** In-flight spread-out of the current report across the aggregator's 1s windows. */
+  pacer?: Pacer;
 }
 const ingest = new Map<string, IngestState>();
 
-export function ingestArtilleryReport(runId: string, body: { kind: string; report: ArtilleryReport }): boolean {
+interface Pacer {
+  timer: NodeJS.Timeout | null;
+  ticks: number;
+  done: number;
+  count: number;
+  success: number;
+  q: Array<[number, number]>;
+  applied: number;
+  appliedSuccess: number;
+  fromVus: number;
+  toVus: number;
+}
+
+/** Apply whatever a pacer hasn't gotten to yet in one shot, e.g. when superseded or the run ends. */
+function flushPacer(state: IngestState): void {
+  const p = state.pacer;
+  if (!p) return;
+  if (p.timer) clearInterval(p.timer);
+  const remaining = p.count - p.applied;
+  const remainingSuccess = p.success - p.appliedSuccess;
+  if (remaining > 0)
+    state.ctx.agg.recordDistribution(remaining, remainingSuccess, p.q);
+  state.ctx.agg.setVus(p.toVus);
+  state.pacer = undefined;
+}
+
+/**
+ * Artillery reports counters in one lump every ~10s. Feeding a lump to the
+ * aggregator in a single tick makes a smooth ~10 rps look like a spike to
+ * ~100 rps followed by nine empty seconds on the live chart — the aggregator
+ * closes a window every ~1s, so whichever window happens to be open when the
+ * lump arrives gets all of it. This spreads a lump evenly across the seconds
+ * it actually covers instead.
+ */
+function pace(
+  state: IngestState,
+  batch: {
+    count: number;
+    success: number;
+    q: Array<[number, number]>;
+    vus: number;
+  },
+  spanSec: number,
+): void {
+  flushPacer(state);
+  if (batch.count <= 0) {
+    state.ctx.agg.setVus(batch.vus);
+    return;
+  }
+  const ticks = Math.max(1, Math.min(30, Math.round(spanSec)));
+  const p: Pacer = {
+    timer: null,
+    ticks,
+    done: 0,
+    count: batch.count,
+    success: batch.success,
+    q: batch.q,
+    applied: 0,
+    appliedSuccess: 0,
+    fromVus: state.ctx.agg.vus,
+    toVus: batch.vus,
+  };
+  state.pacer = p;
+  const step = (): void => {
+    p.done++;
+    const countSoFar = Math.round((p.count * p.done) / p.ticks);
+    const successSoFar = Math.round((p.success * p.done) / p.ticks);
+    const slice = countSoFar - p.applied;
+    const sliceSuccess = successSoFar - p.appliedSuccess;
+    if (slice > 0) state.ctx.agg.recordDistribution(slice, sliceSuccess, p.q);
+    p.applied = countSoFar;
+    p.appliedSuccess = successSoFar;
+    state.ctx.agg.setVus(
+      Math.round(p.fromVus + ((p.toVus - p.fromVus) * p.done) / p.ticks),
+    );
+    if (p.done >= p.ticks) {
+      if (p.timer) clearInterval(p.timer);
+      if (state.pacer === p) state.pacer = undefined;
+    }
+  };
+  step(); // show the first slice right away rather than making the chart wait a second
+  if (p.done < p.ticks) {
+    p.timer = setInterval(step, 1000);
+    p.timer.unref();
+  }
+}
+
+export function ingestArtilleryReport(
+  runId: string,
+  body: { kind: string; report: ArtilleryReport },
+): boolean {
   const state = ingest.get(runId);
   if (!state) return false;
   // The `done` payload is the cumulative aggregate for the whole run. Folding
   // it in on top of the per-period `stats` ticks would double every counter.
-  if (body.kind === 'done') return true;
+  if (body.kind === "done") return true;
   applyReport(state, body.report);
   return true;
 }
 
 export const artilleryRunner: Runner = {
-  protocol: 'socket',
+  protocol: "socket",
 
   async available() {
-    return probe(getSettings().artilleryPath, ['--version']);
+    return probe(getSettings().artilleryPath, ["--version"]);
   },
 
   async run(ctx: RunnerContext): Promise<RunnerResult> {
     const cfg = ctx.config.socket;
-    if (!cfg) throw new Error('socket config missing');
+    if (!cfg) throw new Error("socket config missing");
 
-    const dir = await mkdtemp(join(tmpdir(), 'ltd-art-'));
-    const scriptPath = join(dir, 'script.yml');
-    const outPath = join(dir, 'report.json');
+    const dir = await mkdtemp(join(tmpdir(), "ltd-art-"));
+    const scriptPath = join(dir, "script.yml");
+    const outPath = join(dir, "report.json");
 
     // yaml.stringify, never string templating — user input must not be able to
     // break out of a scalar and inject YAML structure.
@@ -77,67 +171,101 @@ export const artilleryRunner: Runner = {
     let phasesSec = 0;
     let scenarioBudgetSec = 0;
     if (usesCustomScript(ctx.config.script)) {
-      const userScript = await materializeScript(ctx.config.script, dir, 'script.yml');
+      const userScript = await materializeScript(
+        ctx.config.script,
+        dir,
+        "script.yml",
+      );
       // Re-emit their YAML with our live-stats plugin merged in, so custom
       // scripts still stream to the charts instead of only reporting at the end.
       const merged = await injectPlugin(userScript, ctx.runId);
       if (merged) {
-        await writeFile(scriptPath, merged.yaml, 'utf8');
+        await writeFile(scriptPath, merged.yaml, "utf8");
         phasesSec = merged.phasesSec;
         scenarioBudgetSec = merged.scenarioSec;
-        ctx.log('info', `custom artillery script: ${userScript}`);
+        ctx.log("info", `custom artillery script: ${userScript}`);
       } else {
         runScript = userScript;
-        ctx.log('warn', `custom artillery script could not be parsed as YAML — running as-is, live metrics unavailable until it finishes`);
+        ctx.log(
+          "warn",
+          `custom artillery script could not be parsed as YAML — running as-is, live metrics unavailable until it finishes`,
+        );
       }
     } else {
-      await writeFile(scriptPath, yamlStringify(buildScript(cfg, ctx.runId)), 'utf8');
+      await writeFile(
+        scriptPath,
+        yamlStringify(buildScript(cfg, ctx.runId)),
+        "utf8",
+      );
       phasesSec = cfg.phases.reduce((sum, p) => sum + (p.durationSec || 0), 0);
       scenarioBudgetSec = flowBudgetSec(
         cfg.flow.map((step) => ({
-          think: step.kind === 'think' ? Number(step.value) || 0 : 0,
-          waits: step.kind === 'expect' || (step.kind === 'emit' && step.acknowledge === true),
+          think: step.kind === "think" ? Number(step.value) || 0 : 0,
+          waits:
+            step.kind === "expect" ||
+            (step.kind === "emit" && step.acknowledge === true),
         })),
       );
     }
-    const state: IngestState = { ctx, created: 0, finished: 0 };
+    const state: IngestState = {
+      ctx,
+      created: 0,
+      finished: 0,
+      lastReportAt: Date.now(),
+    };
     ingest.set(ctx.runId, state);
 
     const bin = getSettings().artilleryPath;
-    const args = ['run', '--output', outPath, runScript];
-    ctx.log('info', `artillery ${args.join(' ')}`);
+    const args = ["run", "--output", outPath, runScript];
+    ctx.log("info", `artillery ${args.join(" ")}`);
 
     const child = spawn(bin, args, {
       shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         ARTILLERY_PLUGIN_PATH: PLUGIN_DIR,
-        ARTILLERY_DISABLE_TELEMETRY: 'true',
+        ARTILLERY_DISABLE_TELEMETRY: "true",
         // Inherited by artillery's worker processes, which is where the engine
         // actually runs — see the guard's own comment for what it fixes.
-        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import "${pathToFileURL(SOCKETIO_GUARD).href}"`.trim(),
-        ...(bin.includes('/') ? { LTD_ARTILLERY_MAIN: bin } : {}),
+        NODE_OPTIONS:
+          `${process.env.NODE_OPTIONS ?? ""} --import "${pathToFileURL(SOCKETIO_GUARD).href}"`.trim(),
+        ...(bin.includes("/") ? { LTD_ARTILLERY_MAIN: bin } : {}),
       },
     });
 
-    const onAbort = () => { child.kill('SIGINT'); };
-    ctx.signal.addEventListener('abort', onAbort, { once: true });
+    const onAbort = () => {
+      child.kill("SIGINT");
+    };
+    ctx.signal.addEventListener("abort", onAbort, { once: true });
 
     // A dead worker takes its virtual users and the final report with it, so
     // the run must say that plainly rather than reporting a short test.
     let workerDied = false;
     const watchLine = (line: string): void => {
-      if (workerDied || !/^worker error|Callback was already called/.test(line)) return;
+      if (workerDied || !/^worker error|Callback was already called/.test(line))
+        return;
       workerDied = true;
-      ctx.error('artillery-worker', line.trim());
-      ctx.log('error',
-        'an artillery worker crashed — the virtual users it was running stopped early. '
-        + 'This usually follows a connection dropped by the target mid-scenario.');
+      ctx.error("artillery-worker", line.trim());
+      ctx.log(
+        "error",
+        "an artillery worker crashed — the virtual users it was running stopped early. " +
+          "This usually follows a connection dropped by the target mid-scenario.",
+      );
     };
 
-    child.stdout.on('data', (b: Buffer) => splitLines(b).forEach((l) => { ctx.log('info', l); watchLine(l); }));
-    child.stderr.on('data', (b: Buffer) => splitLines(b).forEach((l) => { ctx.log('warn', l); watchLine(l); }));
+    child.stdout.on("data", (b: Buffer) =>
+      splitLines(b).forEach((l) => {
+        ctx.log("info", l);
+        watchLine(l);
+      }),
+    );
+    child.stderr.on("data", (b: Buffer) =>
+      splitLines(b).forEach((l) => {
+        ctx.log("warn", l);
+        watchLine(l);
+      }),
+    );
 
     /**
      * Stall watchdog.
@@ -171,54 +299,79 @@ export const artilleryRunner: Runner = {
      * seconds of load could sit another seventy doing nothing. What matters is
      * not how long it has been, but whether anything is still happening.
      */
-    const watchdog = phasesSec > 0
-      ? setInterval(() => {
-          if (exited) return;
-          const now = Date.now();
-          if (now < phasesEndAt + idleMs) return;
-          const idleFor = now - (state.lastProgressAt ?? startedAt);
-          if (idleFor < idleMs) return;
+    const watchdog =
+      phasesSec > 0
+        ? setInterval(() => {
+            if (exited) return;
+            const now = Date.now();
+            if (now < phasesEndAt + idleMs) return;
+            const idleFor = now - (state.lastProgressAt ?? startedAt);
+            if (idleFor < idleMs) return;
 
-          stalled = true;
-          const pending = Math.max(0, state.created - state.finished);
-          const detail = `nothing happened for ${Math.round(idleFor / 1000)}s`
-            + (pending > 0 ? `, ${pending} virtual user${pending === 1 ? '' : 's'} never finished` : '');
-          ctx.error('artillery-stalled', detail);
-          ctx.log('error',
-            `artillery stopped making progress ${Math.round(idleFor / 1000)}s ago and its ${phasesSec}s of phases are over, `
-            + `so it is being stopped. ${pending > 0 ? `${pending} virtual user${pending === 1 ? ' is' : 's are'} ` : 'A virtual user is '}`
-            + 'most likely waiting on an acknowledgement that never arrived.');
-          child.kill('SIGINT');
-          setTimeout(() => { if (!exited) child.kill('SIGKILL'); }, 10_000).unref();
-        }, 2_000)
-      : null;
+            stalled = true;
+            const pending = Math.max(0, state.created - state.finished);
+            const detail =
+              `nothing happened for ${Math.round(idleFor / 1000)}s` +
+              (pending > 0
+                ? `, ${pending} virtual user${pending === 1 ? "" : "s"} never finished`
+                : "");
+            ctx.error("artillery-stalled", detail);
+            ctx.log(
+              "error",
+              `artillery stopped making progress ${Math.round(idleFor / 1000)}s ago and its ${phasesSec}s of phases are over, ` +
+                `so it is being stopped. ${pending > 0 ? `${pending} virtual user${pending === 1 ? " is" : "s are"} ` : "A virtual user is "}` +
+                "most likely waiting on an acknowledgement that never arrived.",
+            );
+            child.kill("SIGINT");
+            setTimeout(() => {
+              if (!exited) child.kill("SIGKILL");
+            }, 10_000).unref();
+          }, 2_000)
+        : null;
     watchdog?.unref();
 
     const exitCode = await new Promise<number | null>((resolve) => {
-      child.on('close', (code) => { exited = true; resolve(code); });
-      child.on('error', (err) => { exited = true; ctx.error('spawn', `${bin}: ${err.message}`); resolve(null); });
+      child.on("close", (code) => {
+        exited = true;
+        resolve(code);
+      });
+      child.on("error", (err) => {
+        exited = true;
+        ctx.error("spawn", `${bin}: ${err.message}`);
+        resolve(null);
+      });
     });
 
     if (watchdog) clearInterval(watchdog);
-    ctx.signal.removeEventListener('abort', onAbort);
+    ctx.signal.removeEventListener("abort", onAbort);
+    flushPacer(state);
     ingest.delete(ctx.runId);
 
     // Final report is authoritative if the plugin never reached us.
     try {
-      const raw = JSON.parse(await readFile(outPath, 'utf8')) as { aggregate?: ArtilleryReport };
+      const raw = JSON.parse(await readFile(outPath, "utf8")) as {
+        aggregate?: ArtilleryReport;
+      };
       // Only used when the plugin never reached us; otherwise it would double-count.
-      if (raw.aggregate && ctx.agg.totalRequests === 0) applyReport(state, raw.aggregate);
+      if (raw.aggregate && ctx.agg.totalRequests === 0)
+        applyReport(state, raw.aggregate);
     } catch {
       // Say what it means for the numbers, not just that a file was missing.
-      ctx.log('warn', stalled
-        ? 'artillery wrote no final report because it had to be stopped — the figures shown come from the metrics streamed while it ran'
-        : ctx.agg.totalRequests > 0
-          ? 'artillery wrote no final report — the figures shown come from the metrics streamed while it ran'
-          : 'artillery wrote no final report and streamed no metrics — this run has no results');
+      ctx.log(
+        "warn",
+        stalled
+          ? "artillery wrote no final report because it had to be stopped — the figures shown come from the metrics streamed while it ran"
+          : ctx.agg.totalRequests > 0
+            ? "artillery wrote no final report — the figures shown come from the metrics streamed while it ran"
+            : "artillery wrote no final report and streamed no metrics — this run has no results",
+      );
     }
 
     await rm(dir, { recursive: true, force: true });
-    return { nativeVerdict: exitCode === 0 ? 'pass' : exitCode === null ? undefined : 'fail' };
+    return {
+      nativeVerdict:
+        exitCode === 0 ? "pass" : exitCode === null ? undefined : "fail",
+    };
   },
 };
 
@@ -228,26 +381,52 @@ export const artilleryRunner: Runner = {
  * to running it untouched rather than failing the run.
  */
 async function injectPlugin(
-  file: string, runId: string,
+  file: string,
+  runId: string,
 ): Promise<{ yaml: string; phasesSec: number; scenarioSec: number } | null> {
   try {
-    const doc = yamlParse(await readFile(file, 'utf8')) as Record<string, unknown> | null;
-    if (!doc || typeof doc !== 'object') return null;
+    const doc = yamlParse(await readFile(file, "utf8")) as Record<
+      string,
+      unknown
+    > | null;
+    if (!doc || typeof doc !== "object") return null;
     const config = (doc.config ??= {}) as Record<string, unknown>;
     const plugins = (config.plugins ??= {}) as Record<string, unknown>;
-    plugins['ltd-publish'] = { url: `http://127.0.0.1:${PORT}/_ingest/artillery/${runId}`, runId };
-    const phases = Array.isArray(config.phases) ? config.phases as Array<Record<string, unknown>> : [];
-    const phasesSec = phases.reduce((sum, ph) => sum + (Number(ph.duration) || 0), 0);
+    plugins["ltd-publish"] = {
+      url: `http://127.0.0.1:${PORT}/_ingest/artillery/${runId}`,
+      runId,
+    };
+    const phases = Array.isArray(config.phases)
+      ? (config.phases as Array<Record<string, unknown>>)
+      : [];
+    const phasesSec = phases.reduce(
+      (sum, ph) => sum + (Number(ph.duration) || 0),
+      0,
+    );
 
-    const scenarios = Array.isArray(doc.scenarios) ? doc.scenarios as Array<Record<string, unknown>> : [];
-    const scenarioSec = Math.max(0, ...scenarios.map((sc) => {
-      const flow = Array.isArray(sc.flow) ? sc.flow as Array<Record<string, unknown>> : [];
-      return flowBudgetSec(flow.map((step) => ({
-        think: Number(step.think) || 0,
-        waits: 'response' in step || Boolean((step.emit as { acknowledge?: unknown } | undefined)?.acknowledge)
-          || 'acknowledge' in step,
-      })));
-    }));
+    const scenarios = Array.isArray(doc.scenarios)
+      ? (doc.scenarios as Array<Record<string, unknown>>)
+      : [];
+    const scenarioSec = Math.max(
+      0,
+      ...scenarios.map((sc) => {
+        const flow = Array.isArray(sc.flow)
+          ? (sc.flow as Array<Record<string, unknown>>)
+          : [];
+        return flowBudgetSec(
+          flow.map((step) => ({
+            think: Number(step.think) || 0,
+            waits:
+              "response" in step ||
+              Boolean(
+                (step.emit as { acknowledge?: unknown } | undefined)
+                  ?.acknowledge,
+              ) ||
+              "acknowledge" in step,
+          })),
+        );
+      }),
+    );
     return { yaml: yamlStringify(doc), phasesSec, scenarioSec };
   } catch {
     return null;
@@ -262,14 +441,20 @@ async function injectPlugin(
  * timeouts — an emit awaiting an acknowledgement has no timeout at all, so a
  * step that has waited this long is not slow, it is stuck.
  */
-function flowBudgetSec(steps: Array<{ think: number; waits: boolean }>): number {
+function flowBudgetSec(
+  steps: Array<{ think: number; waits: boolean }>,
+): number {
   const think = steps.reduce((sum, s) => sum + s.think, 0);
   const waits = steps.some((s) => s.waits) ? 10 : 0;
   return Math.min(think + waits, 3600);
 }
 
 function splitLines(b: Buffer): string[] {
-  return b.toString('utf8').split('\n').map((s) => s.trimEnd()).filter(Boolean);
+  return b
+    .toString("utf8")
+    .split("\n")
+    .map((s) => s.trimEnd())
+    .filter(Boolean);
 }
 
 /**
@@ -283,63 +468,78 @@ function applyReport(state: IngestState, report: ArtilleryReport): void {
   const c = report.counters ?? {};
   const s = report.summaries ?? {};
 
-  const sent = c['socketio.emit'] ?? c['websocket.messages_sent'] ?? c['http.requests'] ?? c['vusers.created'] ?? 0;
-  const failed = (c['vusers.failed'] ?? 0) + (c['websocket.send_errors'] ?? 0);
+  const sent =
+    c["socketio.emit"] ??
+    c["websocket.messages_sent"] ??
+    c["http.requests"] ??
+    c["vusers.created"] ??
+    0;
+  const failed = (c["vusers.failed"] ?? 0) + (c["websocket.send_errors"] ?? 0);
 
-  state.created += c['vusers.created'] ?? 0;
-  state.finished += (c['vusers.completed'] ?? 0) + (c['vusers.failed'] ?? 0);
-  ctx.agg.setVus(Math.max(0, state.created - state.finished));
+  state.created += c["vusers.created"] ?? 0;
+  state.finished += (c["vusers.completed"] ?? 0) + (c["vusers.failed"] ?? 0);
+  const targetVus = Math.max(0, state.created - state.finished);
 
   // Sending a message or finishing a virtual user is progress; a period that
   // reports neither is a test standing still. The stall watchdog reads this.
-  const ended = (c['vusers.completed'] ?? 0) + (c['vusers.failed'] ?? 0);
-  if (sent > 0 || ended > 0 || (c['vusers.created'] ?? 0) > 0) state.lastProgressAt = Date.now();
+  const ended = (c["vusers.completed"] ?? 0) + (c["vusers.failed"] ?? 0);
+  if (sent > 0 || ended > 0 || (c["vusers.created"] ?? 0) > 0)
+    state.lastProgressAt = Date.now();
+
+  const now = Date.now();
+  const spanSec = (now - state.lastReportAt) / 1000;
+  state.lastReportAt = now;
 
   // Prefer true round-trip time when the flow measured it. `vusers.session_length`
   // is the fallback and measures something else — whole-scenario duration,
   // think time included — so say so rather than passing it off as latency.
   // socketio.response_time is a genuine emit→ack/response round trip.
-  const rtt = s['socketio.response_time'] ?? s['websocket.response_time'] ?? s['http.response_time'];
+  const rtt =
+    s["socketio.response_time"] ??
+    s["websocket.response_time"] ??
+    s["http.response_time"];
   if (rtt) state.sawRtt = true;
   // Never mix the two: substituting session length for periods that reported no
   // round-trip time folds two different quantities into one distribution and
   // drags the percentiles towards the much larger session numbers.
-  const lat = rtt ?? (state.sawRtt ? undefined : s['vusers.session_length']);
-  if (!state.warnedLatency && (rtt || s['vusers.session_length'])) {
+  const lat = rtt ?? (state.sawRtt ? undefined : s["vusers.session_length"]);
+  if (!state.warnedLatency && (rtt || s["vusers.session_length"])) {
     state.warnedLatency = true;
-    ctx.log(rtt ? 'info' : 'warn', rtt
-      ? 'latency = socket round-trip time (emit to ack/response)'
-      : 'latency = vusers.session_length (whole scenario incl. think time) — no round-trip metric reported');
+    ctx.log(
+      rtt ? "info" : "warn",
+      rtt
+        ? "latency = socket round-trip time (emit to ack/response)"
+        : "latency = vusers.session_length (whole scenario incl. think time) — no round-trip metric reported",
+    );
   }
   const count = sent > 0 ? sent : (lat?.count ?? 0);
   const success = Math.max(0, count - failed);
 
-  if (count > 0) {
-    if (lat) {
-      const q: Array<[number, number]> = [];
-      if (lat.min != null) q.push([0, lat.min]);
-      if (lat.p50 != null || lat.median != null) q.push([50, lat.p50 ?? lat.median]);
-      if (lat.p75 != null) q.push([75, lat.p75]);
-      if (lat.p90 != null) q.push([90, lat.p90]);
-      if (lat.p95 != null) q.push([95, lat.p95]);
-      if (lat.p99 != null) q.push([99, lat.p99]);
-      if (lat.max != null) q.push([100, lat.max]);
-      ctx.agg.recordDistribution(count, success, q);
-    } else {
-      ctx.agg.recordDistribution(count, success, []);
-    }
+  const q: Array<[number, number]> = [];
+  if (lat) {
+    if (lat.min != null) q.push([0, lat.min]);
+    if (lat.p50 != null || lat.median != null)
+      q.push([50, lat.p50 ?? lat.median]);
+    if (lat.p75 != null) q.push([75, lat.p75]);
+    if (lat.p90 != null) q.push([90, lat.p90]);
+    if (lat.p95 != null) q.push([95, lat.p95]);
+    if (lat.p99 != null) q.push([99, lat.p99]);
+    if (lat.max != null) q.push([100, lat.max]);
   }
+  pace(state, { count, success, q, vus: targetVus }, spanSec);
 
   for (const [k, v] of Object.entries(c)) {
-    if (k.startsWith('errors.') && v > 0) ctx.error(k.slice('errors.'.length), k);
+    if (k.startsWith("errors.") && v > 0)
+      ctx.error(k.slice("errors.".length), k);
   }
-  const ok = c['plugins.expect.ok'];
-  const notOk = c['plugins.expect.failed'];
-  if (ok != null || notOk != null) ctx.agg.addCheck('expect', ok ?? 0, notOk ?? 0);
+  const ok = c["plugins.expect.ok"];
+  const notOk = c["plugins.expect.failed"];
+  if (ok != null || notOk != null)
+    ctx.agg.addCheck("expect", ok ?? 0, notOk ?? 0);
 }
 
 export function buildFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
-  return cfg.engine === 'socketio' ? buildSocketIoFlow(cfg) : buildWsFlow(cfg);
+  return cfg.engine === "socketio" ? buildSocketIoFlow(cfg) : buildWsFlow(cfg);
 }
 
 /**
@@ -349,11 +549,11 @@ export function buildFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
 function buildSocketIoFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
   const flow: Array<Record<string, unknown>> = [];
   for (const step of cfg.flow) {
-    if (step.kind === 'think') {
+    if (step.kind === "think") {
       flow.push({ think: Number(step.value) || 1 });
       continue;
     }
-    if (step.kind === 'listen') {
+    if (step.kind === "listen") {
       // Deliberately dropped. Artillery's socketio engine records a flat ~10s
       // for every `response` step whether or not the event arrives — verified
       // against a server that replies in ~15ms — so keeping it would poison the
@@ -364,9 +564,10 @@ function buildSocketIoFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
     }
     // 'emit' — and 'send' too, so switching engines keeps existing steps usable.
     const entry: Record<string, unknown> = {
-      emit: { channel: step.event ?? 'message', data: parseData(step.value) },
+      emit: { channel: step.event ?? "message", data: parseData(step.value) },
     };
-    if (step.namespace || cfg.namespace) entry.namespace = step.namespace || cfg.namespace;
+    if (step.namespace || cfg.namespace)
+      entry.namespace = step.namespace || cfg.namespace;
     if (step.acknowledge) entry.acknowledge = matchSpec(step);
     flow.push(entry);
   }
@@ -376,7 +577,12 @@ function buildSocketIoFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
 /** Shared by acknowledge and response: assert on a JSON path, or accept anything. */
 function matchSpec(step: SocketFlowStep): Record<string, unknown> {
   if (!step.matchPath) return {};
-  return { match: { json: normalizeJsonPath(step.matchPath), value: step.matchValue ?? '' } };
+  return {
+    match: {
+      json: normalizeJsonPath(step.matchPath),
+      value: step.matchValue ?? "",
+    },
+  };
 }
 
 /**
@@ -389,17 +595,24 @@ function matchSpec(step: SocketFlowStep): Record<string, unknown> {
  */
 export function normalizeJsonPath(path: string): string {
   const p = path.trim();
-  if (p.startsWith('$[')) return p;
-  const bare = p.replace(/^\$\.?/, '').replace(/^\./, '');
-  return bare ? `$[0].${bare}` : '$[0]';
+  if (p.startsWith("$[")) return p;
+  const bare = p.replace(/^\$\.?/, "").replace(/^\./, "");
+  return bare ? `$[0].${bare}` : "$[0]";
 }
 
 /** Send objects as objects so Socket.IO delivers structured data, not a string. */
 export function parseData(value: string): unknown {
   const t = value.trim();
-  if (!t) return '';
-  if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
-    try { return JSON.parse(t); } catch { return value; }
+  if (!t) return "";
+  if (
+    (t.startsWith("{") && t.endsWith("}")) ||
+    (t.startsWith("[") && t.endsWith("]"))
+  ) {
+    try {
+      return JSON.parse(t);
+    } catch {
+      return value;
+    }
   }
   return value;
 }
@@ -407,16 +620,17 @@ export function parseData(value: string): unknown {
 function buildWsFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
   const flow: Array<Record<string, unknown>> = [];
   for (const step of cfg.flow) {
-    if (step.kind === 'send' || step.kind === 'emit') {
+    if (step.kind === "send" || step.kind === "emit") {
       flow.push({ send: step.value });
-    } else if (step.kind === 'think') {
+    } else if (step.kind === "think") {
       flow.push({ think: Number(step.value) || 1 });
-    } else if (step.kind === 'expect' || step.kind === 'listen') {
+    } else if (step.kind === "expect" || step.kind === "listen") {
       // The ws engine reads match specs from inside the send step, beside
       // `payload`. Attaching a sibling key makes Artillery reject the scenario
       // with "must have 1 key" before the run starts.
       const prev = flow[flow.length - 1];
-      const payload = prev && typeof prev.send === 'string' ? prev.send : undefined;
+      const payload =
+        prev && typeof prev.send === "string" ? prev.send : undefined;
       if (prev && payload !== undefined) {
         prev.send = { payload, match: { regexp: escapeRegex(step.value) } };
       }
@@ -426,22 +640,30 @@ function buildWsFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
   return flow;
 }
 
-function buildScript(cfg: SocketConfig, runId: string): Record<string, unknown> {
+function buildScript(
+  cfg: SocketConfig,
+  runId: string,
+): Record<string, unknown> {
   const flow = buildFlow(cfg);
-  const engineConfig = cfg.engine === 'socketio'
-    ? {
-        socketio: {
-          ...(cfg.transports.length ? { transports: cfg.transports } : {}),
-          ...(Object.keys(cfg.query).length ? { query: cfg.query } : {}),
-          ...(Object.keys(cfg.headers).length ? { extraHeaders: cfg.headers } : {}),
-        },
-      }
-    : {
-        ws: {
-          headers: cfg.headers,
-          ...(cfg.subprotocols.length ? { subprotocols: cfg.subprotocols } : {}),
-        },
-      };
+  const engineConfig =
+    cfg.engine === "socketio"
+      ? {
+          socketio: {
+            ...(cfg.transports.length ? { transports: cfg.transports } : {}),
+            ...(Object.keys(cfg.query).length ? { query: cfg.query } : {}),
+            ...(Object.keys(cfg.headers).length
+              ? { extraHeaders: cfg.headers }
+              : {}),
+          },
+        }
+      : {
+          ws: {
+            headers: cfg.headers,
+            ...(cfg.subprotocols.length
+              ? { subprotocols: cfg.subprotocols }
+              : {}),
+          },
+        };
 
   return {
     config: {
@@ -454,16 +676,16 @@ function buildScript(cfg: SocketConfig, runId: string): Record<string, unknown> 
         ...(p.rampTo ? { rampTo: p.rampTo } : {}),
       })),
       plugins: {
-        'ltd-publish': {
+        "ltd-publish": {
           url: `http://127.0.0.1:${PORT}/_ingest/artillery/${runId}`,
           runId,
         },
       },
     },
-    scenarios: [{ engine: cfg.engine, name: 'socket', flow }],
+    scenarios: [{ engine: cfg.engine, name: "socket", flow }],
   };
 }
 
 function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

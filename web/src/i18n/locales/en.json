@@ -101,6 +101,10 @@
     "count": "Count",
     "sample": "Sample",
     "passed": "Passed",
+    "customMetrics": "Custom metrics",
+    "type": "Type",
+    "key": "Key",
+    "value": "Value",
     "configSnapshot": "Configuration snapshot",
     "states": {
       "running": "Running",

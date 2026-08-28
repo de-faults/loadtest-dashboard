@@ -4,7 +4,7 @@ import { DEFAULT_REST } from '../shared/defaults.ts';
 import { parseThreshold, toK6Thresholds } from '../metrics/thresholds.ts';
 import {
   asArray, asBool, asNumber, asRecord, asString, propertyName, staticValue, toSeconds,
-  UNRESOLVED, type Static,
+  UNRESOLVED, type Static, type StaticOpts,
 } from './literal.ts';
 import type { CheckSpec, RestConfig, RunConfig, ThresholdSpec } from '../shared/types.ts';
 
@@ -298,6 +298,10 @@ function applyOptions(
       rest.loadModel = 'stages';
       const st = readStages(asArray(first.stages));
       if (st.length) rest.stages = st;
+    } else if (!first) {
+      // e.g. `const scenarios = {}` filled in by `if` blocks: readable as an
+      // object, but its contents only exist once k6 runs the script.
+      warnings.push('`scenarios` is assembled at runtime — load model left at defaults');
     } else {
       warnings.push(`scenario executor "${executor ?? 'unknown'}" has no form equivalent — load model left at defaults`);
     }
@@ -379,13 +383,17 @@ function mapK6Threshold(metric: string, expr: string): string | null {
 
 /** `export const <name> = { ... }` → static object, for options and dashboard. */
 function collectExportedObjects(ast: ESTree.Program): Map<string, Record<string, Static>> {
+  const consts = topLevelConsts(ast);
+  // Read partially: scripts assemble `options` from consts and computed fields,
+  // and one unreadable property must not cost the form every other one.
+  const opts: StaticOpts = { lookup: (name) => consts.get(name), partial: true };
   const out = new Map<string, Record<string, Static>>();
   for (const node of ast.body) {
     if (node.type !== 'ExportNamedDeclaration' || !node.declaration) continue;
     if (node.declaration.type !== 'VariableDeclaration') continue;
     for (const decl of node.declaration.declarations) {
       if (decl.id.type !== 'Identifier' || !decl.init) continue;
-      const value = asRecord(staticValue(decl.init));
+      const value = asRecord(staticValue(decl.init as ESTree.AnyNode, opts));
       if (value) out.set(decl.id.name, value);
     }
   }
@@ -502,14 +510,10 @@ function topLevelConsts(ast: ESTree.Program): Map<string, ESTree.AnyNode> {
 function resolve(
   node: ESTree.AnyNode | undefined,
   consts: Map<string, ESTree.AnyNode>,
-  depth = 0,
 ): Static | typeof UNRESOLVED {
-  if (!node) return UNRESOLVED;
-  if (node.type === 'Identifier' && depth < 5) {
-    const target = consts.get(node.name);
-    return target ? resolve(target, consts, depth + 1) : UNRESOLVED;
-  }
-  return staticValue(node);
+  // Not partial: a request argument read with holes in it would misreport what
+  // the script actually sends.
+  return staticValue(node, { lookup: (name) => consts.get(name) });
 }
 
 function stringRecord(rec: Record<string, Static> | null): Record<string, string> | null {
@@ -550,7 +554,12 @@ function parseChecks(ast: ESTree.Program, source: string): CheckParse {
     for (const prop of (obj as ESTree.ObjectExpression).properties) {
       if (prop.type !== 'Property') continue;
       const name = propertyName(prop);
-      if (!name) continue;
+      if (!name) {
+        // A computed key — `[`${method} status is 2xx`]` — names a check the
+        // form has no name for, so say so rather than dropping it in silence.
+        warnings.push(`check with a computed name skipped: ${snippet(source, prop.key as ESTree.AnyNode)}`);
+        continue;
+      }
       const fn = prop.value;
       if (fn.type !== 'ArrowFunctionExpression' && fn.type !== 'FunctionExpression') continue;
       const bodyNode = fn.type === 'ArrowFunctionExpression' && fn.body.type !== 'BlockStatement'

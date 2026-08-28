@@ -5,8 +5,14 @@
  * threshold engine and CSV exporter never need to know which protocol ran.
  */
 
-export type Protocol = 'rest' | 'socket' | 'kafka';
-export type RunState = 'queued' | 'running' | 'passed' | 'failed' | 'error' | 'stopped';
+export type Protocol = "rest" | "socket" | "kafka";
+export type RunState =
+  | "queued"
+  | "running"
+  | "passed"
+  | "failed"
+  | "error"
+  | "stopped";
 
 export interface LatencyProfile {
   min: number;
@@ -57,6 +63,18 @@ export interface ErrorBucket {
   sample: string;
 }
 
+/**
+ * Any k6 metric outside the built-in set (custom Counter/Gauge/Rate/Trend from
+ * a bring-your-own script). `values` is whatever numeric fields k6's own
+ * summary reported for it (e.g. `count`/`rate` for a Counter, `p(95)` for a
+ * Trend) — passed through as-is rather than guessing a fixed shape per type.
+ */
+export interface CustomMetricResult {
+  name: string;
+  type: string;
+  values: Record<string, number>;
+}
+
 export interface RunSummary {
   runId: string;
   protocol: Protocol;
@@ -79,17 +97,45 @@ export interface RunSummary {
   checks: CheckResult[];
   thresholds: ThresholdResult[];
   errors: ErrorBucket[];
-  verdict: 'pass' | 'fail';
+  /** Custom metrics from a bring-your-own script; empty for UI-built runs. */
+  customMetrics: CustomMetricResult[];
+  verdict: "pass" | "fail";
 }
 
 export type RunEvent =
-  | { t: 'start'; runId: string; startedAt: number; protocol: Protocol; profileName: string; target: string }
-  | { t: 'tick'; runId: string; window: WindowMetrics }
-  | { t: 'check'; runId: string; name: string; passed: number; failed: number }
-  | { t: 'error'; runId: string; ts: number; kind: string; message: string; count: number }
-  | { t: 'log'; runId: string; ts: number; level: 'info' | 'warn' | 'error'; line: string }
-  | { t: 'end'; runId: string; endedAt: number; state: RunState; summary: RunSummary }
-  | { t: 'kafka-monitor'; runId: string | null; payload: KafkaMonitorPayload };
+  | {
+      t: "start";
+      runId: string;
+      startedAt: number;
+      protocol: Protocol;
+      profileName: string;
+      target: string;
+    }
+  | { t: "tick"; runId: string; window: WindowMetrics }
+  | { t: "check"; runId: string; name: string; passed: number; failed: number }
+  | {
+      t: "error";
+      runId: string;
+      ts: number;
+      kind: string;
+      message: string;
+      count: number;
+    }
+  | {
+      t: "log";
+      runId: string;
+      ts: number;
+      level: "info" | "warn" | "error";
+      line: string;
+    }
+  | {
+      t: "end";
+      runId: string;
+      endedAt: number;
+      state: RunState;
+      summary: RunSummary;
+    }
+  | { t: "kafka-monitor"; runId: string | null; payload: KafkaMonitorPayload };
 
 // ─── Run configuration ───────────────────────────────────────────────────────
 
@@ -101,7 +147,7 @@ export interface ThresholdSpec {
 export interface CheckSpec {
   name: string;
   /** status | body_contains | json_path | regex | latency_under */
-  kind: 'status' | 'body_contains' | 'json_path' | 'regex' | 'latency_under';
+  kind: "status" | "body_contains" | "json_path" | "regex" | "latency_under";
   value: string;
   /** For json_path only. */
   path?: string;
@@ -117,11 +163,16 @@ export interface Stage {
 
 export interface RestConfig {
   url: string;
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
   headers: Record<string, string>;
   body: string;
-  bodyType: 'none' | 'json' | 'raw' | 'form';
-  auth: { kind: 'none' | 'basic' | 'bearer'; username?: string; password?: string; token?: string };
+  bodyType: "none" | "json" | "raw" | "form";
+  auth: {
+    kind: "none" | "basic" | "bearer";
+    username?: string;
+    password?: string;
+    token?: string;
+  };
   timeoutSec: number;
   followRedirects: boolean;
   insecureSkipTlsVerify: boolean;
@@ -131,7 +182,7 @@ export interface RestConfig {
    * 'stages' = ramping VUs through a list of stages
    * 'rate'   = constant arrival rate, independent of response time
    */
-  loadModel: 'vus' | 'stages' | 'rate';
+  loadModel: "vus" | "stages" | "rate";
   /** loadModel 'vus' */
   vus: number;
   vusDurationSec: number;
@@ -148,7 +199,7 @@ export interface SocketFlowStep {
    * ws engine:       send | think | expect
    * socket.io engine: emit | think | listen
    */
-  kind: 'send' | 'think' | 'expect' | 'emit' | 'listen';
+  kind: "send" | "think" | "expect" | "emit" | "listen";
   /** send/emit: payload · think: seconds · expect: substring */
   value: string;
   /** emit/listen: the Socket.IO event name (Artillery calls it the channel). */
@@ -165,7 +216,7 @@ export interface SocketFlowStep {
 
 export interface SocketConfig {
   /** 'ws' = raw WebSocket, 'socketio' = Socket.IO (named events + acks). */
-  engine: 'ws' | 'socketio';
+  engine: "ws" | "socketio";
   url: string;
   headers: Record<string, string>;
   subprotocols: string[];
@@ -175,7 +226,12 @@ export interface SocketConfig {
   query: Record<string, string>;
   /** Socket.IO only: restrict transports, e.g. ["websocket"]. */
   transports: string[];
-  phases: Array<{ name: string; durationSec: number; arrivalRate: number; rampTo?: number }>;
+  phases: Array<{
+    name: string;
+    durationSec: number;
+    arrivalRate: number;
+    rampTo?: number;
+  }>;
   flow: SocketFlowStep[];
   /** Measure round-trip by pairing each send with the next expect. */
   measureRoundTrip: boolean;
@@ -186,11 +242,11 @@ export interface KafkaConfig {
   topic: string;
   /** Raw librdkafka properties, merged last over everything else. */
   librdkafka: Record<string, string>;
-  acks: '0' | '1' | 'all';
-  compression: 'none' | 'gzip' | 'snappy' | 'lz4' | 'zstd';
-  keyStrategy: 'none' | 'random' | 'fixed' | 'sequence';
+  acks: "0" | "1" | "all";
+  compression: "none" | "gzip" | "snappy" | "lz4" | "zstd";
+  keyStrategy: "none" | "random" | "fixed" | "sequence";
   keyValue: string;
-  payloadType: 'json' | 'raw' | 'random';
+  payloadType: "json" | "raw" | "random";
   payload: string;
   payloadSizeBytes: number;
   producers: number;
@@ -198,7 +254,7 @@ export interface KafkaConfig {
   durationSec: number;
   /** 0 = unlimited, stop on duration instead. */
   maxMessages: number;
-  latencyMode: 'produce-ack' | 'end-to-end';
+  latencyMode: "produce-ack" | "end-to-end";
   consumerGroup: string;
   /** Poll consumer-group lag during the run and chart it alongside TPS. */
   monitorLag: boolean;
@@ -215,7 +271,7 @@ export interface KafkaConfig {
  *              relative imports, `open()` calls and CSV feeds keep working.
  */
 export interface ScriptConfig {
-  mode: 'builtin' | 'inline' | 'path';
+  mode: "builtin" | "inline" | "path";
   /** Script body for `inline`. */
   content: string;
   /** Absolute path for `path`. */
@@ -257,18 +313,42 @@ export interface RunRow {
 
 // ─── Kafka lag monitor ───────────────────────────────────────────────────────
 
-export interface PartitionLag { partition: number; latest: number; committed: number; lag: number }
-export interface GroupTopicLag { topic: string; totalLag: number; partitions: PartitionLag[] }
-export interface GroupInfo { groupId: string; state: string; memberCount: number; topics: GroupTopicLag[]; totalLag: number }
-export interface TopicInfo { name: string; partitionCount: number; endOffsetSum: number }
+export interface PartitionLag {
+  partition: number;
+  latest: number;
+  committed: number;
+  lag: number;
+}
+export interface GroupTopicLag {
+  topic: string;
+  totalLag: number;
+  partitions: PartitionLag[];
+}
+export interface GroupInfo {
+  groupId: string;
+  state: string;
+  memberCount: number;
+  topics: GroupTopicLag[];
+  totalLag: number;
+}
+export interface TopicInfo {
+  name: string;
+  partitionCount: number;
+  endOffsetSum: number;
+}
 
 /**
  * Broker authentication for the monitor. Values are passed through to
  * librdkafka; the password never leaves the server in any status or event.
  */
 export interface KafkaAuth {
-  securityProtocol: 'PLAINTEXT' | 'SSL' | 'SASL_PLAINTEXT' | 'SASL_SSL';
-  saslMechanism: 'PLAIN' | 'SCRAM-SHA-256' | 'SCRAM-SHA-512' | 'GSSAPI' | 'OAUTHBEARER';
+  securityProtocol: "PLAINTEXT" | "SSL" | "SASL_PLAINTEXT" | "SASL_SSL";
+  saslMechanism:
+    | "PLAIN"
+    | "SCRAM-SHA-256"
+    | "SCRAM-SHA-512"
+    | "GSSAPI"
+    | "OAUTHBEARER";
   username: string;
   password: string;
   /** CA bundle path for SSL / SASL_SSL. */
@@ -292,10 +372,10 @@ export interface KafkaMonitorPayload {
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 export interface AppSettings {
-  language: 'en' | 'th';
-  theme: 'dark' | 'light';
-  csvDelimiter: ',' | ';' | '\t';
-  csvLanguage: 'en' | 'th';
+  language: "en" | "th";
+  theme: "dark" | "light";
+  csvDelimiter: "," | ";" | "\t";
+  csvLanguage: "en" | "th";
   k6Path: string;
   artilleryPath: string;
   retentionRuns: number;

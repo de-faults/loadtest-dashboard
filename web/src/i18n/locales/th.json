@@ -101,6 +101,10 @@
     "count": "จำนวน",
     "sample": "ตัวอย่าง",
     "passed": "ผ่าน",
+    "customMetrics": "ตัวชี้วัดที่กำหนดเอง",
+    "type": "ประเภท",
+    "key": "รายการ",
+    "value": "ค่า",
     "configSnapshot": "สำเนาการตั้งค่า",
     "states": {
       "running": "กำลังทำงาน",
