@@ -1,7 +1,15 @@
 import type {
   AppSettings, KafkaAuth, Profile, Protocol, RunConfig, RunRow, RunSummary,
-  RunnerAvailability, WindowMetrics,
+  RunnerAvailability, SocketConfig, WindowMetrics,
 } from '@shared/types.ts';
+
+export interface SocketProbe {
+  ok: boolean;
+  lines: Array<{ level: 'info' | 'ok' | 'warn' | 'error'; line: string; atMs: number }>;
+  transport?: string;
+  reply?: string;
+  suggestion?: string;
+}
 
 export interface MonitorStatus {
   running: boolean;
@@ -100,6 +108,9 @@ export const api = {
     }>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   stopRun: (id: string) => req<{ ok: true }>(`/api/runs/${id}/stop`, { method: 'POST' }),
   deleteRun: (id: string) => req<{ ok: true }>(`/api/runs/${id}`, { method: 'DELETE' }),
+
+  probeSocket: (config: SocketConfig) =>
+    req<SocketProbe>('/api/socket/probe', { method: 'POST', body: JSON.stringify({ config }) }),
 
   kafkaMonitor: () => req<MonitorStatus>('/api/kafka/monitor'),
   startKafkaMonitor: (bootstrapServers: string, intervalSec: number, auth: KafkaAuth | null) =>

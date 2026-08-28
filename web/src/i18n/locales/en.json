@@ -223,7 +223,12 @@
     "phaseConstant": "Constant rate",
     "phaseRamp": "Ramp",
     "arrivalRateFrom": "Arrival rate from",
-    "arrivalRateHint": "New virtual users per second, held for the whole phase."
+    "arrivalRateHint": "New virtual users per second, held for the whole phase.",
+    "probe": "Test connection",
+    "probeRunning": "Connecting…",
+    "probeOk": "Verified",
+    "probeFailed": "Failed",
+    "probeHint": "Opens one connection, sends the flow's first message, and shows the reply."
   },
   "history": {
     "title": "Run history",

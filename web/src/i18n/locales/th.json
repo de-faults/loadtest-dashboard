@@ -223,7 +223,12 @@
     "phaseConstant": "อัตราคงที่",
     "phaseRamp": "ไต่ระดับ",
     "arrivalRateFrom": "อัตราเริ่มต้น",
-    "arrivalRateHint": "จำนวน virtual user ใหม่ต่อวินาที คงที่ตลอดเฟส"
+    "arrivalRateHint": "จำนวน virtual user ใหม่ต่อวินาที คงที่ตลอดเฟส",
+    "probe": "ทดสอบการเชื่อมต่อ",
+    "probeRunning": "กำลังเชื่อมต่อ…",
+    "probeOk": "ต่อได้",
+    "probeFailed": "ไม่สำเร็จ",
+    "probeHint": "เปิดการเชื่อมต่อ 1 ครั้ง ส่งข้อความแรกของ flow แล้วแสดงสิ่งที่ตอบกลับมา"
   },
   "history": {
     "title": "ประวัติการทดสอบ",

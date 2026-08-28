@@ -395,7 +395,7 @@ export function normalizeJsonPath(path: string): string {
 }
 
 /** Send objects as objects so Socket.IO delivers structured data, not a string. */
-function parseData(value: string): unknown {
+export function parseData(value: string): unknown {
   const t = value.trim();
   if (!t) return '';
   if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {

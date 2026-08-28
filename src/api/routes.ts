@@ -14,12 +14,13 @@ import { ingestArtilleryReport } from '../runners/artillery.runner.ts';
 import { monitorStatus, startMonitor, stopMonitor } from '../kafka/monitor.ts';
 import { importKafkaAuth } from '../kafka/authImport.ts';
 import { exampleScript } from '../runners/script.ts';
+import { probeSocket } from '../runners/socketProbe.ts';
 import {
   detectProtocol, exportScript, importScript, SCRIPT_FILENAME, SCRIPT_MIME,
 } from '../transfer/index.ts';
-import { kafkaAuthSchema, profileSchema, runConfigSchema, settingsSchema } from './schema.ts';
+import { kafkaAuthSchema, profileSchema, runConfigSchema, settingsSchema, socketSchema } from './schema.ts';
 import { TOKEN } from '../config.ts';
-import type { KafkaAuth, Profile, Protocol, RunConfig, RunEvent } from '../shared/types.ts';
+import type { KafkaAuth, Profile, Protocol, RunConfig, RunEvent, SocketConfig } from '../shared/types.ts';
 
 export function registerRoutes(app: FastifyInstance): void {
   // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -201,6 +202,21 @@ export function registerRoutes(app: FastifyInstance): void {
       return reply.code(409).send({ error: failed[0]?.error ?? 'no run could be started', failed });
     }
     return { runs: started, failed };
+  });
+
+  /**
+   * Open one connection, send the flow's first message, and report what came
+   * back — including the acknowledgement payload, which a load test never
+   * shows. Diagnostic only: a single socket, closed before this returns.
+   */
+  app.post('/api/socket/probe', async (req, reply) => {
+    const parsed = socketSchema.safeParse((req.body as { config?: unknown })?.config);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues });
+    try {
+      return await probeSocket(parsed.data as unknown as SocketConfig);
+    } catch (err) {
+      return reply.code(500).send({ error: (err as Error).message });
+    }
   });
 
   app.get('/api/runs/active', async () => activeRuns());

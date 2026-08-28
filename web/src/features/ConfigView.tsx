@@ -4,8 +4,9 @@ import type {
   CheckSpec, KafkaConfig, Profile, Protocol, RestConfig, RunConfig, SocketConfig,
   SocketFlowStep, Stage,
 } from '@shared/types.ts';
-import { api } from '../lib/api.ts';
+import { api, type SocketProbe } from '../lib/api.ts';
 import { Empty, Panel } from '../components/Panel.tsx';
+import { Badge } from '../components/Stat.tsx';
 import {
   CheckField, KeyValueEditor, NumberField, SelectField, TextAreaField, TextField,
 } from '../components/Fields.tsx';
@@ -330,6 +331,66 @@ function RestForm({ value, headerHints, headerValueHints, onChange }: {
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────
 
+/**
+ * Connect once and show what the server said back.
+ *
+ * A load test reports rates and percentiles; it cannot tell you whether the
+ * server ever acknowledged anything, which is the first thing to establish when
+ * a socket profile fails.
+ */
+function SocketProbePanel({ config }: { config: SocketConfig }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<SocketProbe | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      setResult(await api.probeSocket(config));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="inline" style={{ marginTop: 8 }}>
+        <button className="btn btn-sm" disabled={busy} onClick={() => void run()}>
+          🔌 {busy ? t('config.probeRunning') : t('config.probe')}
+        </button>
+        {result ? (
+          <Badge tone={result.ok ? 'pass' : 'fail'}>
+            {result.ok ? t('config.probeOk') : t('config.probeFailed')}
+          </Badge>
+        ) : null}
+        {result?.transport ? <span className="field-hint">{result.transport}</span> : null}
+        <span className="field-hint">{t('config.probeHint')}</span>
+      </div>
+
+      {error ? <div className="script-warn">{error}</div> : null}
+
+      {result ? (
+        <>
+          <div className="logs" style={{ maxHeight: 220, marginTop: 6 }}>
+            {result.lines.map((l, i) => (
+              <div key={i} className={`log-line ${l.level === 'error' ? 'log-error' : l.level === 'warn' ? 'log-warn' : ''}`}>
+                <span className="log-ts">+{l.atMs}ms</span>
+                <span className={l.level === 'ok' ? 'v-green' : undefined}>{l.line}</span>
+              </div>
+            ))}
+          </div>
+          {result.suggestion ? <div className="script-warn">⚠ {result.suggestion}</div> : null}
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function SocketForm({ value, headerHints, headerValueHints, onChange }: {
   value: SocketConfig;
   headerHints: string[];
@@ -393,6 +454,8 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
         <CheckField label={t('config.measureRtt')} value={value.measureRoundTrip}
           onChange={(v) => set('measureRoundTrip', v)} />
       ) : null}
+
+      <SocketProbePanel config={value} />
 
       <div className="section-title">{t('config.phases')}</div>
       {value.phases.map((p, i) => {
