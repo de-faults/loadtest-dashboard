@@ -146,6 +146,7 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
           <div className="panel-body ctl-bar">
             <span className={`dot ${status?.running && conn === 'live' ? 'live' : 'dead'}`} />
             <input value={bootstrap} onChange={(e) => setBootstrap(e.target.value)}
+              onBlur={(e) => setBootstrap(e.target.value.trim())}
               disabled={status?.running} placeholder="localhost:9092" />
             <input type="number" min={1} value={interval} style={{ flex: '0 1 80px' }}
               onChange={(e) => setIntervalSec(Number(e.target.value))} disabled={status?.running}

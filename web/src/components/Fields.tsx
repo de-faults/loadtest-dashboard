@@ -13,7 +13,13 @@ export function Field(props: { label: string; hint?: string; children: ReactNode
 export function TextField(props: {
   label: string; value: string; onChange: (v: string) => void;
   hint?: string; placeholder?: string; type?: string;
+  /** Off for values where an edge space may be deliberate. Passwords never trim. */
+  trim?: boolean;
 }) {
+  // Trimming happens on blur, not on every keystroke, so a space can still be
+  // typed in the middle of a value. A pasted URL or token that came with a
+  // trailing newline is the case this exists for.
+  const trim = props.trim ?? props.type !== 'password';
   return (
     <Field label={props.label} hint={props.hint}>
       <input
@@ -21,6 +27,11 @@ export function TextField(props: {
         value={props.value}
         placeholder={props.placeholder}
         onChange={(e) => props.onChange(e.target.value)}
+        onBlur={(e) => {
+          if (!trim) return;
+          const v = e.target.value.trim();
+          if (v !== props.value) props.onChange(v);
+        }}
       />
     </Field>
   );
@@ -129,6 +140,9 @@ export function KeyValueEditor(props: {
               list={props.suggestions?.length ? listId : undefined}
               placeholder={props.keyLabel}
               onChange={(e) => update(i, e.target.value, v)}
+              // A header or property name with an edge space is never intended,
+              // and would be sent verbatim.
+              onBlur={(e) => { if (e.target.value !== k.trim()) update(i, e.target.value.trim(), v); }}
             />
             {valueOpts?.length ? (
               <datalist id={valueListId}>
@@ -140,6 +154,7 @@ export function KeyValueEditor(props: {
               list={valueOpts?.length ? valueListId : undefined}
               placeholder={props.valueLabel}
               onChange={(e) => update(i, k, e.target.value)}
+              onBlur={(e) => { if (e.target.value !== v.trim()) update(i, k, e.target.value.trim()); }}
             />
             <button
               type="button"

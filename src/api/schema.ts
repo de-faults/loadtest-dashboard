@@ -3,19 +3,38 @@ import { z } from 'zod';
 
 /** Server-side validation. The UI renders its forms from the same field set. */
 
-const kv = z.record(z.string(), z.string());
+/**
+ * Names and values arrive with edge whitespace more often than anyone expects —
+ * pasted URLs carry a newline, a copied header name a leading space, and both
+ * are sent verbatim. Trimming happens here as well as in the form, so an import
+ * or a direct API call is cleaned the same way.
+ *
+ * Deliberately *not* trimmed: passwords, request bodies, message payloads and
+ * script content, where an edge space can be part of the value.
+ */
+const trimmed = z.string().trim();
+
+const kv = z.record(z.string(), z.string()).transform((rec) => {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rec)) {
+    const key = k.trim();
+    if (key) out[key] = v.trim();
+  }
+  return out;
+});
 
 export const restSchema = z.object({
-  url: z.string().url(),
+  url: trimmed.url(),
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']),
   headers: kv,
   body: z.string(),
   bodyType: z.enum(['none', 'json', 'raw', 'form']),
   auth: z.object({
     kind: z.enum(['none', 'basic', 'bearer']),
-    username: z.string().optional(),
+    username: trimmed.optional(),
+    // The password keeps its edge whitespace; a token never has any on purpose.
     password: z.string().optional(),
-    token: z.string().optional(),
+    token: trimmed.optional(),
   }),
   timeoutSec: z.number().int().min(1).max(600),
   followRedirects: z.boolean(),
@@ -35,14 +54,14 @@ export const socketSchema = z.object({
   // existed carry none of these fields and must keep loading.
   engine: z.enum(['ws', 'socketio']).default('ws'),
   // Socket.IO is reached over http(s); raw WebSocket over ws(s).
-  url: z.string().regex(/^(wss?|https?):\/\//, 'must start with ws://, wss://, http:// or https://'),
+  url: trimmed.regex(/^(wss?|https?):\/\//, 'must start with ws://, wss://, http:// or https://'),
   headers: kv,
-  subprotocols: z.array(z.string()),
-  namespace: z.string().max(200).default(''),
+  subprotocols: z.array(trimmed),
+  namespace: trimmed.max(200).default(''),
   query: kv.default({}),
-  transports: z.array(z.string()).default([]),
+  transports: z.array(trimmed).default([]),
   phases: z.array(z.object({
-    name: z.string(),
+    name: trimmed,
     durationSec: z.number().int().min(1),
     arrivalRate: z.number().int().min(1),
     rampTo: z.number().int().min(1).optional(),
@@ -50,23 +69,23 @@ export const socketSchema = z.object({
   flow: z.array(z.object({
     kind: z.enum(['send', 'think', 'expect', 'emit', 'listen']),
     value: z.string(),
-    event: z.string().max(200).optional(),
+    event: trimmed.max(200).optional(),
     acknowledge: z.boolean().optional(),
-    matchPath: z.string().max(200).optional(),
-    matchValue: z.string().optional(),
-    namespace: z.string().max(200).optional(),
+    matchPath: trimmed.max(200).optional(),
+    matchValue: trimmed.optional(),
+    namespace: trimmed.max(200).optional(),
   })),
   measureRoundTrip: z.boolean(),
 });
 
 export const kafkaSchema = z.object({
-  bootstrapServers: z.string().min(1),
-  topic: z.string().min(1),
+  bootstrapServers: trimmed.min(1),
+  topic: trimmed.min(1),
   librdkafka: kv,
   acks: z.enum(['0', '1', 'all']),
   compression: z.enum(['none', 'gzip', 'snappy', 'lz4', 'zstd']),
   keyStrategy: z.enum(['none', 'random', 'fixed', 'sequence']),
-  keyValue: z.string(),
+  keyValue: trimmed,
   payloadType: z.enum(['json', 'raw', 'random']),
   payload: z.string(),
   payloadSizeBytes: z.number().int().min(1).max(10_000_000),
@@ -75,23 +94,23 @@ export const kafkaSchema = z.object({
   durationSec: z.number().int().min(1).max(86_400),
   maxMessages: z.number().int().min(0),
   latencyMode: z.enum(['produce-ack', 'end-to-end']),
-  consumerGroup: z.string(),
+  consumerGroup: trimmed,
   monitorLag: z.boolean(),
 });
 
 export const checkSchema = z.object({
-  name: z.string().min(1),
+  name: trimmed.min(1),
   kind: z.enum(['status', 'body_contains', 'json_path', 'regex', 'latency_under']),
-  value: z.string(),
-  path: z.string().optional(),
+  value: trimmed,
+  path: trimmed.optional(),
   minPassRatePct: z.number().min(0).max(100).optional(),
 });
 
 export const scriptSchema = z.object({
   mode: z.enum(['builtin', 'inline', 'path']),
   content: z.string().max(1_000_000),
-  path: z.string().max(4096),
-  filename: z.string().max(255),
+  path: trimmed.max(4096),
+  filename: trimmed.max(255),
 });
 
 export const runConfigSchema = z.object({
@@ -101,7 +120,7 @@ export const runConfigSchema = z.object({
   socket: socketSchema.optional(),
   kafka: kafkaSchema.optional(),
   checks: z.array(checkSchema),
-  thresholds: z.array(z.object({ expr: z.string().min(1) })),
+  thresholds: z.array(z.object({ expr: trimmed.min(1) })),
 }).superRefine((c, ctx) => {
   if (c.protocol === 'rest' && !c.rest) ctx.addIssue({ code: 'custom', message: 'rest config required' });
   if (c.protocol === 'socket' && !c.socket) ctx.addIssue({ code: 'custom', message: 'socket config required' });
@@ -117,7 +136,7 @@ export const runConfigSchema = z.object({
 
 export const profileSchema = z.object({
   id: z.string().optional(),
-  name: z.string().min(1).max(120),
+  name: trimmed.min(1).max(120),
   protocol: z.enum(['rest', 'socket', 'kafka']),
   config: runConfigSchema,
 });
@@ -127,8 +146,8 @@ export const settingsSchema = z.object({
   theme: z.enum(['dark', 'light']).optional(),
   csvDelimiter: z.enum([',', ';', '\t']).optional(),
   csvLanguage: z.enum(['en', 'th']).optional(),
-  k6Path: z.string().min(1).optional(),
-  artilleryPath: z.string().min(1).optional(),
+  k6Path: trimmed.min(1).optional(),
+  artilleryPath: trimmed.min(1).optional(),
   retentionRuns: z.number().int().min(1).max(10_000).optional(),
   kafkaMonitorIntervalSec: z.number().int().min(1).max(300).optional(),
 });
@@ -136,9 +155,9 @@ export const settingsSchema = z.object({
 export const kafkaAuthSchema = z.object({
   securityProtocol: z.enum(['PLAINTEXT', 'SSL', 'SASL_PLAINTEXT', 'SASL_SSL']),
   saslMechanism: z.enum(['PLAIN', 'SCRAM-SHA-256', 'SCRAM-SHA-512', 'GSSAPI', 'OAUTHBEARER']),
-  username: z.string().max(500),
+  username: trimmed.max(500),
   password: z.string().max(2000),
-  sslCaLocation: z.string().max(4096),
+  sslCaLocation: trimmed.max(4096),
   sslSkipVerify: z.boolean(),
   extra: z.record(z.string(), z.string()),
 });

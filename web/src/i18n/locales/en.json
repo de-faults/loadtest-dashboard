@@ -218,7 +218,12 @@
     "matchPathHint": "Leave empty to accept any response. e.g. $.status",
     "matchValue": "Expected value",
     "moveUp": "Move up",
-    "moveDown": "Move down"
+    "moveDown": "Move down",
+    "phaseMode": "Phase type",
+    "phaseConstant": "Constant rate",
+    "phaseRamp": "Ramp",
+    "arrivalRateFrom": "Arrival rate from",
+    "arrivalRateHint": "New virtual users per second, held for the whole phase."
   },
   "history": {
     "title": "Run history",

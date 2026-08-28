@@ -218,7 +218,12 @@
     "matchPathHint": "เว้นว่าง = รับทุกคำตอบ เช่น $.status",
     "matchValue": "ค่าที่คาดหวัง",
     "moveUp": "เลื่อนขึ้น",
-    "moveDown": "เลื่อนลง"
+    "moveDown": "เลื่อนลง",
+    "phaseMode": "ชนิดเฟส",
+    "phaseConstant": "อัตราคงที่",
+    "phaseRamp": "ไต่ระดับ",
+    "arrivalRateFrom": "อัตราเริ่มต้น",
+    "arrivalRateHint": "จำนวน virtual user ใหม่ต่อวินาที คงที่ตลอดเฟส"
   },
   "history": {
     "title": "ประวัติการทดสอบ",

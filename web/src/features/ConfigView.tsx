@@ -256,7 +256,9 @@ function RestForm({ value, headerHints, headerValueHints, onChange }: {
           </>
         ) : null}
         {value.auth.kind === 'bearer' ? (
-          <TextField label="Token" type="password" value={value.auth.token ?? ''}
+          // Masked like a password, but a token never legitimately ends in
+          // whitespace — a pasted one often does.
+          <TextField label="Token" type="password" trim value={value.auth.token ?? ''}
             onChange={(v) => set('auth', { ...value.auth, token: v })} />
         ) : null}
       </div>
@@ -399,16 +401,36 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
           phases[i] = { ...p, ...next };
           set('phases', phases);
         };
+        // A phase ramps only when it has a target to ramp to. The mode is read
+        // back off that rather than stored twice, so the two cannot disagree.
+        const mode: 'constant' | 'ramp' = p.rampTo ? 'ramp' : 'constant';
         return (
           <div key={i} className="row-item">
             <div className="row-fields">
               <TextField label={t('common.name')} value={p.name} onChange={(v) => patch({ name: v })} />
+              <SelectField
+                label={t('config.phaseMode')}
+                value={mode}
+                options={[
+                  { value: 'constant' as const, label: t('config.phaseConstant') },
+                  { value: 'ramp' as const, label: t('config.phaseRamp') },
+                ]}
+                onChange={(m) => patch({
+                  rampTo: m === 'ramp' ? (p.rampTo ?? Math.max(1, p.arrivalRate * 2)) : undefined,
+                })}
+              />
               <NumberField label={t('config.stageDuration')} value={p.durationSec} min={1}
                 onChange={(v) => patch({ durationSec: v })} />
-              <NumberField label={t('config.arrivalRate')} value={p.arrivalRate} min={1}
-                onChange={(v) => patch({ arrivalRate: v })} />
-              <NumberField label={t('config.rampTo')} value={p.rampTo ?? 0} min={0}
-                onChange={(v) => patch({ rampTo: v || undefined })} />
+              <NumberField
+                label={mode === 'ramp' ? t('config.arrivalRateFrom') : t('config.arrivalRate')}
+                hint={mode === 'constant' ? t('config.arrivalRateHint') : undefined}
+                value={p.arrivalRate} min={1}
+                onChange={(v) => patch({ arrivalRate: v })}
+              />
+              {mode === 'ramp' ? (
+                <NumberField label={t('config.rampTo')} value={p.rampTo ?? 0} min={1}
+                  onChange={(v) => patch({ rampTo: Math.max(1, v) })} />
+              ) : null}
             </div>
             <button className="btn btn-sm row-del" title={t('common.remove')}
               onClick={() => set('phases', value.phases.filter((_, j) => j !== i))}>✕</button>
@@ -461,6 +483,7 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
                   value={step.event ?? ''}
                   placeholder={t('config.eventName')}
                   onChange={(e) => patch({ event: e.target.value })}
+                  onBlur={(e) => { if (e.target.value !== e.target.value.trim()) patch({ event: e.target.value.trim() }); }}
                 />
               ) : null}
 
@@ -505,6 +528,7 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
                 value={step.value}
                 placeholder="pong"
                 onChange={(e) => patch({ value: e.target.value })}
+                onBlur={(e) => { if (e.target.value !== e.target.value.trim()) patch({ value: e.target.value.trim() }); }}
               />
             ) : null}
 
