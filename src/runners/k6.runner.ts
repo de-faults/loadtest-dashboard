@@ -160,6 +160,9 @@ function consumePoint(line: string, ctx: RunnerContext): void {
       // for any custom script — it's set by k6's http module, not user code.
       const ok = tags?.expected_response !== "false";
       ctx.agg.record({ ts, latencyMs: value, ok });
+      // k6 tags every sample with the scenario that issued it, so unlike
+      // artillery the split carries the scenario's own latency, not a headcount.
+      if (tags?.scenario) ctx.agg.recordScenarioSample(tags.scenario, value, ok);
       if (!ok) {
         const kind = tags?.error_code
           ? `http_${tags.error_code}`

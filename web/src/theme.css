@@ -412,6 +412,16 @@ pre.logs { white-space: pre; }
   color: var(--text-faint);
 }
 
+/* Socket scenario: a card grouping one named flow, so several traffic splits
+   read as separate journeys rather than one long list of steps. */
+.scenario-item {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
 /* Socket flow step: a card per step, header row + body, like a request builder. */
 .profile-pick {
   display: grid;

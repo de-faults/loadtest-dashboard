@@ -113,6 +113,9 @@ const HEADERS_TH: Record<string, string> = {
   type: "ประเภท",
   key: "รายการ",
   value: "ค่า",
+  scenario: "ซีนาริโอ",
+  vusers: "ผู้ใช้เสมือน",
+  share_pct: "สัดส่วน (%)",
 };
 
 function header(key: string, lang: "en" | "th"): string {
@@ -306,6 +309,43 @@ export function customMetricsCsv(s: RunSummary, o: CsvOptions): string {
   return out;
 }
 
+/**
+ * How the load split across named scenarios. Empty for runners that report no
+ * split, and for runs recorded before the split was captured.
+ */
+export function scenariosCsv(s: RunSummary, o: CsvOptions): string {
+  let out =
+    BOM +
+    row(
+      [
+        "run_id",
+        "scenario",
+        "vusers",
+        "requests",
+        "success_rate_pct",
+        "p95_ms",
+        "share_pct",
+      ].map((c) => header(c, o.language)),
+      o.delimiter,
+    );
+  // A column the runner does not report stays empty rather than reading as a
+  // zero the tool never measured.
+  for (const sc of s.scenarios ?? [])
+    out += row(
+      [
+        s.runId,
+        sc.name,
+        sc.vusers ?? "",
+        sc.requests ?? "",
+        sc.successRatePct ?? "",
+        sc.p95 ?? "",
+        sc.sharePct,
+      ],
+      o.delimiter,
+    );
+  return out;
+}
+
 /** Everything for one run in a single file, as `# section` blocks. */
 export function fullReportCsv(runId: string, o: CsvOptions): string | null {
   const run = store.getRun(runId);
@@ -317,6 +357,7 @@ export function fullReportCsv(runId: string, o: CsvOptions): string | null {
     "# checks\r\n" + checksCsv(s, o).slice(BOM.length),
     "# errors\r\n" + errorsCsv(s, o).slice(BOM.length),
     "# custom_metrics\r\n" + customMetricsCsv(s, o).slice(BOM.length),
+    "# scenarios\r\n" + scenariosCsv(s, o).slice(BOM.length),
     "# timeseries\r\n" +
       timeseriesCsv(store.getSamples(runId), o).slice(BOM.length),
   ];

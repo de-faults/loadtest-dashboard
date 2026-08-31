@@ -21,17 +21,31 @@ config:
   socketio:
     transports: ["websocket"]
 
+# Several scenarios split the same load rather than adding to it: every virtual
+# user the phases above create runs exactly one of them, picked by `weight`.
+# Here three in four browse, one in four checks out.
 scenarios:
   - engine: socketio
-    name: order-create
+    name: browse
+    weight: 3
+    flow:
+      # Fire and forget — no acknowledgement, so nothing is waited on.
+      - emit:
+          channel: "order.create"
+          data: { sku: "abc-123", qty: 1 }
+      - think: 1
+
+  - engine: socketio
+    name: checkout
+    weight: 1
     flow:
       # Send a message and wait for its acknowledgement, asserting on the
       # ack payload — Artillery's documented emit + acknowledge pattern.
       - emit:
           channel: "order.create"
-          data: { sku: "abc-123", qty: 1 }
+          data: { sku: "abc-123", qty: 5 }
         acknowledge:
           match:
-            json: "$.0.status"
+            json: "$[0].status"
             value: "ok"
       - think: 1

@@ -1,8 +1,10 @@
 import { parse as yamlParse, stringify as yamlStringify } from 'yaml';
-import { DEFAULT_SOCKET } from '../shared/defaults.ts';
+import { DEFAULT_SOCKET, socketScenarios } from '../shared/defaults.ts';
 import { parseThreshold } from '../metrics/thresholds.ts';
-import type { CheckSpec, RunConfig, SocketConfig, SocketFlowStep, ThresholdSpec } from '../shared/types.ts';
-import { buildFlow } from '../runners/artillery.runner.ts';
+import type {
+  CheckSpec, RunConfig, SocketConfig, SocketFlowStep, SocketScenario, ThresholdSpec,
+} from '../shared/types.ts';
+import { buildScenarios } from '../runners/artillery.runner.ts';
 import type { ImportResult } from './k6.ts';
 
 /**
@@ -19,7 +21,7 @@ export function toArtilleryScript(config: RunConfig): string {
 
   // Same builder the runner uses, so an exported script cannot drift from what
   // actually runs.
-  const flow = buildFlow(cfg);
+  const scenarios = buildScenarios(cfg);
 
   const engineConfig = cfg.engine === 'socketio'
     ? {
@@ -47,7 +49,7 @@ export function toArtilleryScript(config: RunConfig): string {
       })),
       ...engineConfig,
     },
-    scenarios: [{ engine: cfg.engine, name: 'socket', flow }],
+    scenarios,
     // Ignored by Artillery; read back on import.
     dashboard: {
       protocol: 'socket',
@@ -114,60 +116,33 @@ export function fromArtilleryScript(source: string): ImportResult {
     if (subs) socket.subprotocols = subs.filter((x): x is string => typeof x === 'string');
   }
 
-  const scenarios = arr(doc.scenarios);
-  const scenario = scenarios?.map(rec).find((s) => s !== null) ?? null;
-  if (!scenario) {
+  const scenarios = (arr(doc.scenarios) ?? []).map(rec).filter((s): s is Record<string, unknown> => s !== null);
+  if (!scenarios.length) {
     warnings.push('no scenarios found — flow left at defaults');
   } else {
-    const engine = str(scenario.engine);
-    if (engine === 'socketio' || engine === 'socket.io') socket.engine = 'socketio';
-    else if (engine === 'ws' || !engine) socket.engine = 'ws';
-    else warnings.push(`scenario engine "${engine}" is not supported — falling back to the ws engine`);
-    if (scenarios && scenarios.length > 1) {
-      warnings.push(`${scenarios.length} scenarios found — only the first is shown in the form`);
+    // Every scenario shares one connection, so they must agree on the engine.
+    // The first one that names a supported engine decides.
+    for (const scenario of scenarios) {
+      const engine = str(scenario.engine);
+      if (engine === 'socketio' || engine === 'socket.io') { socket.engine = 'socketio'; break; }
+      if (engine === 'ws' || !engine) { socket.engine = 'ws'; break; }
+      warnings.push(`scenario engine "${engine}" is not supported — falling back to the ws engine`);
     }
-    const flow = arr(scenario.flow);
-    if (flow) {
-      const steps: SocketFlowStep[] = [];
-      for (const raw of flow) {
-        const step = rec(raw);
-        if (!step) continue;
-        if ('emit' in step) {
-          const emit = rec(step.emit);
-          const data = emit?.data;
-          steps.push({
-            kind: 'emit',
-            event: str(emit?.channel) ?? '',
-            value: typeof data === 'string' ? data : JSON.stringify(data ?? ''),
-            acknowledge: 'acknowledge' in step,
-            ...readMatch(rec(step.acknowledge)),
-            ...(str(step.namespace) ? { namespace: str(step.namespace)! } : {}),
-          });
-          const resp = rec(step.response);
-          if (resp) {
-            const channel = str(resp.channel) ?? str(resp.on) ?? '?';
-            warnings.push(
-              `waiting on server event "${channel}" is not supported: the engine reports a flat ~10s `
-              + 'response time regardless of arrival, and it cannot be combined with an acknowledgement — dropped',
-            );
-          }
-        } else if ('send' in step) {
-          const sendObj = rec(step.send);
-          const payload = sendObj ? sendObj.payload : step.send;
-          const value = typeof payload === 'string' ? payload : JSON.stringify(payload ?? '');
-          steps.push({ kind: 'send', value });
-          // match lives inside `send`; `response.match` is the older shape.
-          const match = rec(sendObj?.match) ?? rec(rec(step.response)?.match);
-          const expected = str(match?.regexp) ?? str(match?.value) ?? str(match?.json);
-          if (expected) steps.push({ kind: 'expect', value: unescapeRegex(expected) });
-        } else if ('think' in step) {
-          steps.push({ kind: 'think', value: String(num(step.think) ?? 1) });
-        } else {
-          warnings.push(`flow step ${JSON.stringify(step).slice(0, 60)} has no form equivalent — dropped`);
-        }
-      }
-      if (steps.length) socket.flow = steps;
+
+    const imported: SocketScenario[] = [];
+    for (const [i, scenario] of scenarios.entries()) {
+      const label = str(scenario.name) ?? `scenario ${i + 1}`;
+      const flow = arr(scenario.flow);
+      if (!flow) continue;
+      const steps = readFlow(flow, label, scenarios.length > 1, warnings);
+      if (!steps.length) continue;
+      imported.push({
+        name: label,
+        ...(num(scenario.weight) !== null ? { weight: num(scenario.weight)! } : {}),
+        flow: steps,
+      });
     }
+    if (imported.length) socket.scenarios = imported;
   }
 
   const socketioCfg = rec(config?.socketio);
@@ -219,14 +194,67 @@ export function fromArtilleryScript(source: string): ImportResult {
 
   // The exporter stamps the connection namespace onto every step; reading it
   // back as a per-step override would rewrite the flow on every round trip.
-  for (const step of socket.flow) {
-    if (step.namespace && step.namespace === socket.namespace) delete step.namespace;
+  for (const scenario of socketScenarios(socket)) {
+    for (const step of scenario.flow) {
+      if (step.namespace && step.namespace === socket.namespace) delete step.namespace;
+    }
   }
 
   return {
     config: { protocol: 'socket', socket, checks, thresholds, script: { mode: 'builtin', content: '', path: '', filename: '' } },
     warnings,
   };
+}
+
+/**
+ * One Artillery flow, in the flat step shape the form edits.
+ *
+ * `named` prefixes warnings with the scenario they came from, which only helps
+ * when there is more than one to tell apart.
+ */
+function readFlow(
+  flow: unknown[], label: string, named: boolean, warnings: string[],
+): SocketFlowStep[] {
+  const where = named ? `${label}: ` : '';
+  const steps: SocketFlowStep[] = [];
+  for (const raw of flow) {
+    const step = rec(raw);
+    if (!step) continue;
+    if ('emit' in step) {
+      const emit = rec(step.emit);
+      const data = emit?.data;
+      steps.push({
+        kind: 'emit',
+        event: str(emit?.channel) ?? '',
+        value: typeof data === 'string' ? data : JSON.stringify(data ?? ''),
+        acknowledge: 'acknowledge' in step,
+        ...readMatch(rec(step.acknowledge)),
+        ...(str(step.namespace) ? { namespace: str(step.namespace)! } : {}),
+      });
+      const resp = rec(step.response);
+      if (resp) {
+        const channel = str(resp.channel) ?? str(resp.on) ?? '?';
+        warnings.push(
+          `${where}waiting on server event "${channel}" is not supported: the engine reports a flat ~10s `
+          + 'response time regardless of arrival, and it cannot be combined with an acknowledgement — dropped',
+        );
+      }
+    } else if ('send' in step) {
+      const sendObj = rec(step.send);
+      const payload = sendObj ? sendObj.payload : step.send;
+      const value = typeof payload === 'string' ? payload : JSON.stringify(payload ?? '');
+      steps.push({ kind: 'send', value });
+      // match lives inside `send`; `response.match` is the older shape.
+      const match = rec(sendObj?.match) ?? rec(rec(step.response)?.match);
+      const expected = str(match?.regexp) ?? str(match?.value) ?? str(match?.json);
+      if (expected) steps.push({ kind: 'expect', value: unescapeRegex(expected) });
+    } else if ('think' in step) {
+      steps.push({ kind: 'think', value: String(num(step.think) ?? 1) });
+    } else {
+      warnings.push(`${where}flow step ${JSON.stringify(step).slice(0, 60)} has no form equivalent — dropped`);
+    }
+  }
+  return steps;
 }
 
 /** Pull `match: { json, value }` back into the flat step fields the form uses. */

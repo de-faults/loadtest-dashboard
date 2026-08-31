@@ -49,6 +49,16 @@ export const restSchema = z.object({
   preAllocatedVUs: z.number().int().min(1),
 });
 
+const socketFlowSchema = z.array(z.object({
+  kind: z.enum(['send', 'think', 'expect', 'emit', 'listen']),
+  value: z.string(),
+  event: trimmed.max(200).optional(),
+  acknowledge: z.boolean().optional(),
+  matchPath: trimmed.max(200).optional(),
+  matchValue: trimmed.optional(),
+  namespace: trimmed.max(200).optional(),
+}));
+
 export const socketSchema = z.object({
   // Defaulted, not required: socket profiles saved before the Socket.IO engine
   // existed carry none of these fields and must keep loading.
@@ -66,17 +76,19 @@ export const socketSchema = z.object({
     arrivalRate: z.number().int().min(1),
     rampTo: z.number().int().min(1).optional(),
   })).min(1),
-  flow: z.array(z.object({
-    kind: z.enum(['send', 'think', 'expect', 'emit', 'listen']),
-    value: z.string(),
-    event: trimmed.max(200).optional(),
-    acknowledge: z.boolean().optional(),
-    matchPath: trimmed.max(200).optional(),
-    matchValue: trimmed.optional(),
-    namespace: trimmed.max(200).optional(),
-  })),
+  // Legacy single-flow shape, folded into `scenarios` by the transform below so
+  // nothing downstream has to know both shapes.
+  flow: socketFlowSchema.optional(),
+  scenarios: z.array(z.object({
+    name: trimmed.max(120).default('socket'),
+    weight: z.number().min(0).max(10_000).optional(),
+    flow: socketFlowSchema,
+  })).default([]),
   measureRoundTrip: z.boolean(),
-});
+}).transform(({ flow, ...rest }) => ({
+  ...rest,
+  scenarios: rest.scenarios.length ? rest.scenarios : [{ name: 'socket', flow: flow ?? [] }],
+}));
 
 export const kafkaSchema = z.object({
   bootstrapServers: trimmed.min(1),

@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
-import type { SocketConfig } from '../shared/types.ts';
+import { socketScenarios } from '../shared/defaults.ts';
+import type { SocketConfig, SocketFlowStep } from '../shared/types.ts';
 import { parseData } from './artillery.runner.ts';
 
 /**
@@ -182,7 +183,7 @@ async function connectIo(
   log.add('ok', `connected in ${Date.now() - started}ms over ${transport}${socket.id ? ` (id ${socket.id})` : ''}`);
   socket.io.on('upgrade', (t) => log.add('info', `transport upgraded to ${(t as { name: string }).name}`));
 
-  const step = cfg.flow.find((s) => s.kind === 'emit' || s.kind === 'send');
+  const step = firstMessage(cfg);
   if (!step) {
     log.add('warn', 'the flow has no message to send — connection verified, nothing else to check');
     socket.disconnect();
@@ -198,6 +199,17 @@ async function connectIo(
   socket.disconnect();
   log.add('info', 'disconnected');
   return { ...result, connected: true, lines: log.lines, transport };
+}
+
+/**
+ * The first message any scenario sends. Scenarios share one connection, so
+ * probing the earliest send is enough to prove the target answers at all — a
+ * leading scenario that only thinks does not make the probe give up.
+ */
+function firstMessage(cfg: SocketConfig): SocketFlowStep | undefined {
+  return socketScenarios(cfg)
+    .flatMap((sc) => sc.flow)
+    .find((s) => s.kind === 'emit' || s.kind === 'send');
 }
 
 async function emitAndAwaitAck(
@@ -283,7 +295,7 @@ async function probeWs(cfg: SocketConfig): Promise<ProbeResult> {
   }
   log.add('ok', `connected in ${Date.now() - started}ms`);
 
-  const step = cfg.flow.find((s) => s.kind === 'send' || s.kind === 'emit');
+  const step = firstMessage(cfg);
   if (!step) {
     log.add('warn', 'the flow has no message to send — connection verified, nothing else to check');
     socket.close();

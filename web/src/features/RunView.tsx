@@ -551,6 +551,42 @@ export function RunView(props: {
               </div>
             ) : null}
 
+            {/* One scenario is every ordinary run — saying so would be noise, so
+                the split only appears once there is something to compare. */}
+            {(summary?.scenarios?.length ?? 0) > 1 ? (
+              <div className="col-6">
+                <Panel title={t('run.scenarios')} flush>
+                  <div className="tbl-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>{t('common.name')}</th>
+                          <th className="r">{t('metrics.vus')}</th>
+                          <th className="r">{t('metrics.requests')}</th>
+                          <th className="r">{t('metrics.successRate')}</th>
+                          <th className="r">{t('metrics.p95')}</th>
+                          <th className="r">{t('run.share')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {summary!.scenarios.map((sc) => (
+                          <tr key={sc.name}>
+                            <td>{sc.name}</td>
+                            <td className="r">{sc.vusers == null ? '—' : num(sc.vusers)}</td>
+                            <td className="r">{sc.requests == null ? '—' : num(sc.requests)}</td>
+                            <td className="r">{sc.successRatePct == null ? '—' : pct(sc.successRatePct, 2)}</td>
+                            <td className="r">{sc.p95 == null ? '—' : `${num(sc.p95, 1)} ms`}</td>
+                            <td className="r">{pct(sc.sharePct, 1)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="field-hint" style={{ padding: '8px 10px 0' }}>{t('run.scenariosHint')}</div>
+                </Panel>
+              </div>
+            ) : null}
+
             <div className={summary?.errors.length ? 'col-6' : 'col-12'}>
               <Panel title={t('run.logs')}>
                 <div className="logs" ref={logRef}>

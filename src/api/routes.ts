@@ -364,6 +364,9 @@ export function registerRoutes(app: FastifyInstance): void {
       case "custom-metrics":
         body = csv.customMetricsCsv(run.summary, o);
         break;
+      case "scenarios":
+        body = csv.scenariosCsv(run.summary, o);
+        break;
       case "all":
         body = csv.fullReportCsv(id, o);
         break;

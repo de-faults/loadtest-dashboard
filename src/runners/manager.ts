@@ -316,6 +316,7 @@ function buildSummary(
     thresholds: [],
     errors: agg.errorBuckets(),
     customMetrics: [],
+    scenarios: agg.scenarioStats(),
     verdict: "pass",
   };
 }

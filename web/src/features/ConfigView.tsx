@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   CheckSpec, KafkaConfig, Profile, Protocol, RestConfig, RunConfig, SocketConfig,
-  SocketFlowStep, Stage,
+  SocketFlowStep, SocketScenario, Stage,
 } from '@shared/types.ts';
+import { socketScenarios } from '@shared/defaults.ts';
 import { api, type SocketProbe } from '../lib/api.ts';
 import { Empty, Panel } from '../components/Panel.tsx';
 import { Badge } from '../components/Stat.tsx';
@@ -412,6 +413,11 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
   const isIo = value.engine === 'socketio';
   const engineValue = value.engine ?? 'ws';
   void engineValue;
+  const scenarios = socketScenarios(value);
+  // Writing scenarios also clears the legacy single `flow`, so a profile saved
+  // before scenarios existed cannot keep a stale second copy of its steps.
+  const setScenarios = (next: SocketScenario[]): void =>
+    onChange({ ...value, scenarios: next, flow: undefined });
 
   return (
     <>
@@ -423,7 +429,12 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
             { value: 'ws' as const, label: t('config.engineWs') },
             { value: 'socketio' as const, label: t('config.engineSocketIo') },
           ]}
-          onChange={(engine) => onChange({ ...value, engine, flow: migrateFlow(value.flow, engine) })} />
+          onChange={(engine) => onChange({
+            ...value,
+            engine,
+            flow: undefined,
+            scenarios: scenarios.map((sc) => ({ ...sc, flow: migrateFlow(sc.flow, engine) })),
+          })} />
         <TextField label={t('config.url')} value={value.url}
           placeholder={isIo ? 'http://localhost:3000' : 'ws://localhost:8080'}
           onChange={(v) => set('url', v)} />
@@ -515,19 +526,76 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
         + {t('common.add')}
       </button>
 
-      <div className="section-title">{t('config.flow')}</div>
-      {value.flow.map((step, i) => {
+      <div className="section-title">{t('config.scenarios')}</div>
+      <div className="field-hint" style={{ marginBottom: 8 }}>{t('config.scenariosHint')}</div>
+      {scenarios.map((sc, si) => {
+        const patchScenario = (next: Partial<SocketScenario>): void => {
+          setScenarios(scenarios.map((x, j) => (j === si ? { ...x, ...next } : x)));
+        };
+        return (
+          <div key={si} className="scenario-item">
+            <div className="step-head">
+              <span className="step-index">{si + 1}</span>
+              <input
+                className="step-event"
+                value={sc.name}
+                placeholder={t('config.scenarioName')}
+                onChange={(e) => patchScenario({ name: e.target.value })}
+                onBlur={(e) => { if (e.target.value !== e.target.value.trim()) patchScenario({ name: e.target.value.trim() }); }}
+              />
+              <label className="step-ack" title={t('config.weightHint')}>
+                <span>{t('config.weight')}</span>
+                <input
+                  type="number" min={1} style={{ width: 64 }}
+                  value={sc.weight ?? 1}
+                  onChange={(e) => patchScenario({ weight: Math.max(1, Number(e.target.value) || 1) })}
+                />
+              </label>
+              <span className="spacer" />
+              <button className="btn btn-sm" title={t('common.remove')} disabled={scenarios.length === 1}
+                onClick={() => setScenarios(scenarios.filter((_, j) => j !== si))}>✕</button>
+            </div>
+
+            <FlowSteps
+              steps={sc.flow}
+              isIo={isIo}
+              onChange={(flow) => patchScenario({ flow })}
+            />
+          </div>
+        );
+      })}
+      <button
+        className="btn btn-sm"
+        onClick={() => setScenarios([...scenarios, {
+          name: `scenario ${scenarios.length + 1}`,
+          flow: [isIo ? { kind: 'emit', value: '', event: '', acknowledge: false } : { kind: 'send', value: '' }],
+        }])}
+      >+ {t('config.addScenario')}</button>
+    </>
+  );
+}
+
+/** The ordered steps of one scenario — the same editor for every scenario. */
+function FlowSteps({ steps, isIo, onChange }: {
+  steps: SocketFlowStep[];
+  isIo: boolean;
+  onChange: (steps: SocketFlowStep[]) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {steps.map((step, i) => {
         const patch = (next: Partial<SocketFlowStep>): void => {
-          const flow = [...value.flow];
+          const flow = [...steps];
           flow[i] = { ...step, ...next };
-          set('flow', flow);
+          onChange(flow);
         };
         const move = (delta: number): void => {
           const j = i + delta;
-          if (j < 0 || j >= value.flow.length) return;
-          const flow = [...value.flow];
+          if (j < 0 || j >= steps.length) return;
+          const flow = [...steps];
           [flow[i], flow[j]] = [flow[j], flow[i]];
-          set('flow', flow);
+          onChange(flow);
         };
         const engineKinds: SocketFlowStep['kind'][] = isIo
           ? ['emit', 'think']
@@ -575,10 +643,10 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
               <span className="spacer" />
               <button className="btn btn-sm" title={t('config.moveUp')} disabled={i === 0}
                 onClick={() => move(-1)}>↑</button>
-              <button className="btn btn-sm" title={t('config.moveDown')} disabled={i === value.flow.length - 1}
+              <button className="btn btn-sm" title={t('config.moveDown')} disabled={i === steps.length - 1}
                 onClick={() => move(1)}>↓</button>
               <button className="btn btn-sm" title={t('common.remove')}
-                onClick={() => set('flow', value.flow.filter((_, j) => j !== i))}>✕</button>
+                onClick={() => onChange(steps.filter((_, j) => j !== i))}>✕</button>
             </div>
 
             {step.kind === 'think' ? (
@@ -622,10 +690,10 @@ function SocketForm({ value, headerHints, headerValueHints, onChange }: {
       })}
       <button
         className="btn btn-sm"
-        onClick={() => set('flow', [...value.flow, isIo
+        onClick={() => onChange([...steps, isIo
           ? { kind: 'emit', value: '', event: '', acknowledge: false }
           : { kind: 'send', value: '' }])}
-      >+ {t('common.add')}</button>
+      >+ {t('config.addStep')}</button>
     </>
   );
 }

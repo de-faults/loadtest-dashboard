@@ -75,6 +75,26 @@ export interface CustomMetricResult {
   values: Record<string, number>;
 }
 
+/**
+ * How the load divided between named scenarios, for scripts that run more than
+ * one. The fields present depend on what the tool reports: Artillery gives only
+ * a virtual-user count per scenario, while k6 tags every sample with its
+ * scenario, so its rows carry the scenario's own requests and percentile too.
+ */
+export interface ScenarioStat {
+  name: string;
+  /** Virtual users the scenario ran. */
+  vusers?: number;
+  /** Requests attributed to the scenario. */
+  requests?: number;
+  /** Share of this scenario's own requests that succeeded. */
+  successRatePct?: number;
+  /** p95 of this scenario's own requests. */
+  p95?: number;
+  /** Share of the run — by requests where they were counted, else by virtual users. */
+  sharePct: number;
+}
+
 export interface RunSummary {
   runId: string;
   protocol: Protocol;
@@ -99,6 +119,8 @@ export interface RunSummary {
   errors: ErrorBucket[];
   /** Custom metrics from a bring-your-own script; empty for UI-built runs. */
   customMetrics: CustomMetricResult[];
+  /** Load split across named scenarios; empty unless the runner reports one. */
+  scenarios: ScenarioStat[];
   verdict: "pass" | "fail";
 }
 
@@ -214,6 +236,18 @@ export interface SocketFlowStep {
   namespace?: string;
 }
 
+/**
+ * One named flow in a socket profile. Every scenario shares the connection
+ * settings and phases of its `SocketConfig`; Artillery picks one per virtual
+ * user, so several of them split the same load between different journeys.
+ */
+export interface SocketScenario {
+  name: string;
+  /** Relative share of virtual users — Artillery's own `weight`. 1 when unset. */
+  weight?: number;
+  flow: SocketFlowStep[];
+}
+
 export interface SocketConfig {
   /** 'ws' = raw WebSocket, 'socketio' = Socket.IO (named events + acks). */
   engine: "ws" | "socketio";
@@ -232,7 +266,12 @@ export interface SocketConfig {
     arrivalRate: number;
     rampTo?: number;
   }>;
-  flow: SocketFlowStep[];
+  scenarios: SocketScenario[];
+  /**
+   * Single-flow shape of profiles saved before scenarios existed. Never written
+   * any more — read every flow through `socketScenarios()`, which migrates it.
+   */
+  flow?: SocketFlowStep[];
   /** Measure round-trip by pairing each send with the next expect. */
   measureRoundTrip: boolean;
 }

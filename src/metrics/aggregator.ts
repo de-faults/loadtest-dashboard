@@ -4,7 +4,19 @@
  */
 
 import { Histogram } from './histogram.ts';
-import type { CheckResult, ErrorBucket, LatencyProfile, WindowMetrics } from '../shared/types.ts';
+import type {
+  CheckResult, ErrorBucket, LatencyProfile, ScenarioStat, WindowMetrics,
+} from '../shared/types.ts';
+
+/** Upper bound on distinct scenario names kept, so a stray tag cannot grow the map without limit. */
+const MAX_SCENARIOS = 50;
+
+interface ScenarioAcc {
+  vusers: number;
+  requests: number;
+  success: number;
+  hist: Histogram;
+}
 
 export interface Sample {
   ts: number;
@@ -41,6 +53,12 @@ export class Aggregator {
 
   readonly checks = new Map<string, { passed: number; failed: number }>();
   readonly errors = new Map<string, { count: number; sample: string }>();
+  /**
+   * Per-scenario totals, for runners that attribute their work to a named
+   * scenario. Capped so an unexpected tag cardinality cannot grow without
+   * bound — a script has scenarios in the tens, never the thousands.
+   */
+  readonly scenarios = new Map<string, ScenarioAcc>();
 
   constructor(startedAt = Date.now()) {
     this.startedAt = startedAt;
@@ -124,6 +142,30 @@ export class Aggregator {
     this.checks.set(name, c);
   }
 
+  addScenarioVus(name: string, count: number): void {
+    if (count <= 0) return;
+    const acc = this.scenarioAcc(name);
+    if (acc) acc.vusers += count;
+  }
+
+  /** One request, attributed to the scenario that issued it. */
+  recordScenarioSample(name: string, latencyMs: number, ok: boolean): void {
+    const acc = this.scenarioAcc(name);
+    if (!acc) return;
+    acc.requests++;
+    if (ok) acc.success++;
+    acc.hist.record(latencyMs);
+  }
+
+  private scenarioAcc(name: string): ScenarioAcc | null {
+    const found = this.scenarios.get(name);
+    if (found) return found;
+    if (this.scenarios.size >= MAX_SCENARIOS) return null;
+    const acc: ScenarioAcc = { vusers: 0, requests: 0, success: 0, hist: new Histogram() };
+    this.scenarios.set(name, acc);
+    return acc;
+  }
+
   addError(kind: string, message: string): void {
     const e = this.errors.get(kind) ?? { count: 0, sample: message };
     e.count++;
@@ -186,6 +228,36 @@ export class Aggregator {
       failed: c.failed,
       passRatePct: c.passed + c.failed ? round2((c.passed / (c.passed + c.failed)) * 100) : 0,
     }));
+  }
+
+  /**
+   * Share is of whichever unit was actually counted — requests when the runner
+   * attributes them, virtual users otherwise. Never of `vusMax`, which answers
+   * a different question and cannot be trusted to add up to 100%.
+   */
+  scenarioStats(): ScenarioStat[] {
+    const entries = [...this.scenarios.entries()];
+    const totalRequests = entries.reduce((a, [, s]) => a + s.requests, 0);
+    const totalVus = entries.reduce((a, [, s]) => a + s.vusers, 0);
+    const byRequests = totalRequests > 0;
+    return entries
+      .map(([name, s]) => ({
+        name,
+        ...(s.vusers ? { vusers: s.vusers } : {}),
+        ...(s.requests
+          ? {
+              requests: s.requests,
+              successRatePct: round2((s.success / s.requests) * 100),
+              p95: round2(s.hist.profile().p95),
+            }
+          : {}),
+        sharePct: byRequests
+          ? round2((s.requests / totalRequests) * 100)
+          : totalVus
+            ? round2((s.vusers / totalVus) * 100)
+            : 0,
+      }))
+      .sort((a, b) => (b.requests ?? b.vusers ?? 0) - (a.requests ?? a.vusers ?? 0));
   }
 
   errorBuckets(): ErrorBucket[] {

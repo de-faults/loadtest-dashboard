@@ -9,6 +9,7 @@ import { PORT } from "../config.ts";
 import { probe } from "./k6.runner.ts";
 import { materializeScript, usesCustomScript } from "./script.ts";
 import type { Runner, RunnerContext, RunnerResult } from "./types.ts";
+import { socketScenarios } from "../shared/defaults.ts";
 import type { SocketConfig, SocketFlowStep } from "../shared/types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -198,13 +199,20 @@ export const artilleryRunner: Runner = {
         "utf8",
       );
       phasesSec = cfg.phases.reduce((sum, p) => sum + (p.durationSec || 0), 0);
-      scenarioBudgetSec = flowBudgetSec(
-        cfg.flow.map((step) => ({
-          think: step.kind === "think" ? Number(step.value) || 0 : 0,
-          waits:
-            step.kind === "expect" ||
-            (step.kind === "emit" && step.acknowledge === true),
-        })),
+      // A virtual user runs one scenario, so the budget is the longest of them,
+      // never their sum.
+      scenarioBudgetSec = Math.max(
+        0,
+        ...socketScenarios(cfg).map((sc) =>
+          flowBudgetSec(
+            sc.flow.map((step) => ({
+              think: step.kind === "think" ? Number(step.value) || 0 : 0,
+              waits:
+                step.kind === "expect" ||
+                (step.kind === "emit" && step.acknowledge === true),
+            })),
+          ),
+        ),
       );
     }
     const state: IngestState = {
@@ -528,9 +536,13 @@ function applyReport(state: IngestState, report: ArtilleryReport): void {
   }
   pace(state, { count, success, q, vus: targetVus }, spanSec);
 
+  const BY_NAME = "vusers.created_by_name.";
   for (const [k, v] of Object.entries(c)) {
     if (k.startsWith("errors.") && v > 0)
       ctx.error(k.slice("errors.".length), k);
+    // The only per-scenario figure artillery reports. There is no per-scenario
+    // latency or failure count, so the split is a headcount and nothing more.
+    else if (k.startsWith(BY_NAME)) ctx.agg.addScenarioVus(k.slice(BY_NAME.length), v);
   }
   const ok = c["plugins.expect.ok"];
   const notOk = c["plugins.expect.failed"];
@@ -538,17 +550,40 @@ function applyReport(state: IngestState, report: ArtilleryReport): void {
     ctx.agg.addCheck("expect", ok ?? 0, notOk ?? 0);
 }
 
-export function buildFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
-  return cfg.engine === "socketio" ? buildSocketIoFlow(cfg) : buildWsFlow(cfg);
+export function buildFlow(
+  cfg: SocketConfig,
+  steps: SocketFlowStep[],
+): Array<Record<string, unknown>> {
+  return cfg.engine === "socketio"
+    ? buildSocketIoFlow(cfg, steps)
+    : buildWsFlow(steps);
+}
+
+/**
+ * Every scenario in Artillery's own shape. They share the connection settings
+ * and phases; a virtual user runs one of them, picked by weight.
+ */
+export function buildScenarios(
+  cfg: SocketConfig,
+): Array<Record<string, unknown>> {
+  return socketScenarios(cfg).map((sc, i) => ({
+    engine: cfg.engine,
+    name: sc.name || `scenario ${i + 1}`,
+    ...(sc.weight != null ? { weight: sc.weight } : {}),
+    flow: buildFlow(cfg, sc.flow),
+  }));
 }
 
 /**
  * Socket.IO flow: named events, optional acknowledgement callbacks, and
  * server-pushed events to wait for.
  */
-function buildSocketIoFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
+function buildSocketIoFlow(
+  cfg: SocketConfig,
+  steps: SocketFlowStep[],
+): Array<Record<string, unknown>> {
   const flow: Array<Record<string, unknown>> = [];
-  for (const step of cfg.flow) {
+  for (const step of steps) {
     if (step.kind === "think") {
       flow.push({ think: Number(step.value) || 1 });
       continue;
@@ -617,9 +652,11 @@ export function parseData(value: string): unknown {
   return value;
 }
 
-function buildWsFlow(cfg: SocketConfig): Array<Record<string, unknown>> {
+function buildWsFlow(
+  steps: SocketFlowStep[],
+): Array<Record<string, unknown>> {
   const flow: Array<Record<string, unknown>> = [];
-  for (const step of cfg.flow) {
+  for (const step of steps) {
     if (step.kind === "send" || step.kind === "emit") {
       flow.push({ send: step.value });
     } else if (step.kind === "think") {
@@ -644,7 +681,6 @@ function buildScript(
   cfg: SocketConfig,
   runId: string,
 ): Record<string, unknown> {
-  const flow = buildFlow(cfg);
   const engineConfig =
     cfg.engine === "socketio"
       ? {
@@ -682,7 +718,7 @@ function buildScript(
         },
       },
     },
-    scenarios: [{ engine: cfg.engine, name: "socket", flow }],
+    scenarios: buildScenarios(cfg),
   };
 }
 

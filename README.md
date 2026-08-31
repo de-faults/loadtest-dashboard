@@ -90,7 +90,10 @@ emit — the two are equal by definition and the chart plots a single line.
   thresholds, and its exit code (99 = threshold breach) can independently fail the run.
 - **WebSocket / Socket.IO** — two engines. Raw `ws` sends plain frames. Socket.IO
   sends named events and optionally waits for the server's acknowledgement
-  callback; assertions are a JSON path plus expected value. Waiting on a
+  callback; assertions are a JSON path plus expected value. A profile can hold
+  several named scenarios sharing one connection setup and one set of phases —
+  each virtual user runs exactly one of them, picked by `weight`, so the
+  scenarios split the load instead of multiplying it. Waiting on a
   server-pushed event is deliberately not offered: the engine records a flat ~10s
   for every such step whether or not the event arrives, and it cannot be combined
   with an acknowledgement, so it would corrupt the latency distribution. An

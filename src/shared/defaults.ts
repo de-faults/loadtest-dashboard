@@ -1,4 +1,6 @@
-import type { KafkaConfig, Protocol, RestConfig, RunConfig, SocketConfig } from './types.ts';
+import type {
+  KafkaConfig, Protocol, RestConfig, RunConfig, SocketConfig, SocketScenario,
+} from './types.ts';
 
 export const DEFAULT_REST: RestConfig = {
   url: 'https://httpbin.org/get',
@@ -36,12 +38,28 @@ export const DEFAULT_SOCKET: SocketConfig = {
     { name: 'warmup', durationSec: 10, arrivalRate: 5 },
     { name: 'ramp', durationSec: 30, arrivalRate: 5, rampTo: 50 },
   ],
-  flow: [
-    { kind: 'send', value: '{"type":"ping"}' },
-    { kind: 'think', value: '1' },
+  scenarios: [
+    {
+      name: 'socket',
+      flow: [
+        { kind: 'send', value: '{"type":"ping"}' },
+        { kind: 'think', value: '1' },
+      ],
+    },
   ],
   measureRoundTrip: false,
 };
+
+/**
+ * The scenarios of a socket config, migrating the single `flow` that profiles
+ * saved before scenarios existed still carry. Always returns at least one, so
+ * callers never have to handle a config with nothing to run.
+ */
+export function socketScenarios(cfg: SocketConfig): SocketScenario[] {
+  if (cfg.scenarios?.length) return cfg.scenarios;
+  if (cfg.flow?.length) return [{ name: 'socket', flow: cfg.flow }];
+  return [{ name: 'socket', flow: [] }];
+}
 
 export const DEFAULT_KAFKA: KafkaConfig = {
   bootstrapServers: 'localhost:9092',
