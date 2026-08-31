@@ -84,7 +84,7 @@ export const DEFAULT_KAFKA: KafkaConfig = {
 export function defaultConfig(protocol: Protocol): RunConfig {
   const base: RunConfig = {
     protocol,
-    script: { mode: 'builtin', content: '', path: '', filename: '' },
+    script: { mode: 'builtin', content: '', path: '', filename: '', env: {} },
     checks: [],
     thresholds: [{ expr: 'p95 < 500' }, { expr: 'success_rate > 99' }],
   };

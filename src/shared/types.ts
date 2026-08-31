@@ -317,6 +317,15 @@ export interface ScriptConfig {
   path: string;
   /** Original filename, kept for display only. */
   filename: string;
+  /**
+   * `__ENV` variables handed to the script (k6 `--env`, Artillery's process
+   * environment). A parameterised script reads its target, rates and duration
+   * from here, so one script serves every run without being edited.
+   *
+   * Absent on profiles saved before the field existed — read it through
+   * `scriptEnv()`, which fills in the empty case.
+   */
+  env: Record<string, string>;
 }
 
 export interface RunConfig {

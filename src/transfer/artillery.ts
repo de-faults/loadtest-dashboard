@@ -201,7 +201,7 @@ export function fromArtilleryScript(source: string): ImportResult {
   }
 
   return {
-    config: { protocol: 'socket', socket, checks, thresholds, script: { mode: 'builtin', content: '', path: '', filename: '' } },
+    config: { protocol: 'socket', socket, checks, thresholds, script: { mode: 'builtin', content: '', path: '', filename: '', env: {} } },
     warnings,
   };
 }

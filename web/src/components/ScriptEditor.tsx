@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Protocol, RunConfig, ScriptConfig } from '@shared/types.ts';
 import { api } from '../lib/api.ts';
-import { CheckField, TextField } from './Fields.tsx';
+import { KeyValueEditor, SelectField, TextField } from './Fields.tsx';
 import { Modal } from './Modal.tsx';
 
 const MAX_BYTES = 1_000_000;
@@ -130,8 +130,6 @@ export function ScriptEditor(props: {
     }
   }
 
-  const usingExternal = props.script.mode === 'path';
-
   return (
     <>
       <div className="section-title">{t('script.title')}</div>
@@ -180,6 +178,21 @@ export function ScriptEditor(props: {
               onClick={() => void importContent(pasted, t('script.pastedLabel'))}>
               {t('script.importPasted')}
             </button>
+            <button
+              className="btn btn-sm"
+              disabled={!pasted.trim()}
+              title={t('script.runPastedHint')}
+              onClick={() => {
+                props.onScriptChange({
+                  ...props.script, mode: 'inline', content: pasted,
+                  filename: props.script.filename || 'script.js',
+                });
+                setNote(t('script.runPastedNote'));
+                setWarnings([]);
+              }}
+            >
+              ▷ {t('script.runPasted')}
+            </button>
             <button className="btn btn-sm" disabled={busy} onClick={() => void loadCurrent()}>
               {t('script.loadCurrent')}
             </button>
@@ -210,22 +223,53 @@ export function ScriptEditor(props: {
         </div>
       ) : null}
 
-      <CheckField
-        label={t('script.useExternal')}
-        value={usingExternal}
-        onChange={(on) => props.onScriptChange({
-          ...props.script,
-          mode: on ? 'path' : 'builtin',
-          content: '',
-        })}
+      <SelectField
+        label={t('script.mode')}
+        value={props.script.mode}
+        options={[
+          { value: 'builtin' as const, label: t('script.modeBuiltin') },
+          { value: 'inline' as const, label: t('script.modeInline') },
+          { value: 'path' as const, label: t('script.modePath') },
+        ]}
+        onChange={(mode) => props.onScriptChange({ ...props.script, mode })}
       />
-      {usingExternal ? (
+
+      {props.script.mode === 'inline' ? (
+        <div className="field">
+          <span className="field-label">{t('script.inlineLabel')}</span>
+          <textarea
+            className="script-area"
+            spellCheck={false}
+            placeholder={t('script.inlinePlaceholder')}
+            value={props.script.content}
+            onChange={(e) => props.onScriptChange({ ...props.script, content: e.target.value })}
+          />
+          <div className="field-hint">{t('script.inlineHint')}</div>
+        </div>
+      ) : null}
+
+      {props.script.mode === 'path' ? (
         <TextField
           label={t('script.filePath')}
           hint={t('script.pathHint')}
           value={props.script.path}
           placeholder="/Users/me/loadtests/checkout.js"
           onChange={(path) => props.onScriptChange({ ...props.script, path })}
+        />
+      ) : null}
+
+      {/* Kafka generators are imported into this process, not spawned, so they
+          have no environment of their own to receive. */}
+      {props.script.mode !== 'builtin' && props.protocol !== 'kafka' ? (
+        <KeyValueEditor
+          label={t('script.envTitle')}
+          hint={t('script.envHint')}
+          value={props.script.env ?? {}}
+          onChange={(env) => props.onScriptChange({ ...props.script, env })}
+          addLabel={t('common.add')}
+          removeLabel={t('common.remove')}
+          keyLabel={t('common.key')}
+          valueLabel={t('common.value')}
         />
       ) : null}
 

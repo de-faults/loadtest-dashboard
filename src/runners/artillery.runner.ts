@@ -7,7 +7,7 @@ import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { getSettings } from "../store/db.ts";
 import { PORT } from "../config.ts";
 import { probe } from "./k6.runner.ts";
-import { materializeScript, usesCustomScript } from "./script.ts";
+import { materializeScript, scriptEnv, usesCustomScript } from "./script.ts";
 import type { Runner, RunnerContext, RunnerResult } from "./types.ts";
 import { socketScenarios } from "../shared/defaults.ts";
 import type { SocketConfig, SocketFlowStep } from "../shared/types.ts";
@@ -232,6 +232,9 @@ export const artilleryRunner: Runner = {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
+        // A parameterised scenario file reads these through $processEnvironment;
+        // listed first so the dashboard's own variables always win.
+        ...scriptEnv(ctx.config.script),
         ARTILLERY_PLUGIN_PATH: PLUGIN_DIR,
         ARTILLERY_DISABLE_TELEMETRY: "true",
         // Inherited by artillery's worker processes, which is where the engine

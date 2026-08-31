@@ -174,7 +174,7 @@ export function ConfigView(props: {
               protocol={editing.protocol}
               profileName={editing.name}
               config={editing.config}
-              script={editing.config.script ?? { mode: 'builtin', content: '', path: '', filename: '' }}
+              script={editing.config.script ?? { mode: 'builtin', content: '', path: '', filename: '', env: {} }}
               onScriptChange={(script) => patchConfig({ script })}
               onImported={(protocol, config) => setEditing({ ...editing, protocol, config })}
               onError={props.onError}

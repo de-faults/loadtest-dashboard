@@ -246,7 +246,7 @@ export function fromK6Script(source: string): ImportResult {
   }
 
   return {
-    config: { protocol: 'rest', rest, checks, thresholds, script: { mode: 'builtin', content: '', path: '', filename: '' } },
+    config: { protocol: 'rest', rest, checks, thresholds, script: { mode: 'builtin', content: '', path: '', filename: '', env: {} } },
     warnings,
   };
 }

@@ -118,11 +118,29 @@ export const checkSchema = z.object({
   minPassRatePct: z.number().min(0).max(100).optional(),
 });
 
+/** Names the runner sets itself; a script variable of the same name would collide. */
+const RESERVED_ENV = new Set(['CFG', 'SUMMARY_OUT']);
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** These become argv entries, so an unbounded value would blow the exec limit. */
+const MAX_ENV_VALUE = 8192;
+
 export const scriptSchema = z.object({
   mode: z.enum(['builtin', 'inline', 'path']),
   content: z.string().max(1_000_000),
   path: trimmed.max(4096),
   filename: trimmed.max(255),
+  env: kv.default({}),
+}).superRefine((s, ctx) => {
+  for (const [key, value] of Object.entries(s.env)) {
+    if (!ENV_NAME.test(key)) {
+      ctx.addIssue({ code: 'custom', message: `invalid environment variable name: ${key}` });
+    } else if (RESERVED_ENV.has(key)) {
+      ctx.addIssue({ code: 'custom', message: `${key} is set by the runner and cannot be overridden` });
+    }
+    if (value.length > MAX_ENV_VALUE) {
+      ctx.addIssue({ code: 'custom', message: `environment variable ${key} is too long (limit ${MAX_ENV_VALUE})` });
+    }
+  }
 });
 
 export const runConfigSchema = z.object({

@@ -19,6 +19,24 @@ export function usesCustomScript(script: ScriptConfig | undefined): script is Sc
   return !!script && script.mode !== 'builtin';
 }
 
+/** A variable name a shell — and every tool that reads one — will accept. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * The `__ENV` variables of a script, defaulting for profiles saved before the
+ * field existed. Names are re-checked here as well as in the request schema:
+ * these end up as `--env` arguments and child-process environment entries, and
+ * a profile can reach a runner from the database without passing through zod.
+ */
+export function scriptEnv(script: ScriptConfig | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(script?.env ?? {})) {
+    const name = key.trim();
+    if (ENV_NAME.test(name)) out[name] = value;
+  }
+  return out;
+}
+
 /**
  * Resolve a custom script to a concrete file to execute.
  *

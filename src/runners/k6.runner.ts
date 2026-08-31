@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSettings } from "../store/db.ts";
 import { toK6Thresholds } from "../metrics/thresholds.ts";
 import { tailLines } from "./tail.ts";
-import { materializeScript, usesCustomScript } from "./script.ts";
+import { materializeScript, scriptEnv, usesCustomScript } from "./script.ts";
 import type { Runner, RunnerContext, RunnerResult } from "./types.ts";
 import type { RestConfig } from "../shared/types.ts";
 
@@ -48,11 +48,19 @@ export const k6Runner: Runner = {
 
     // A custom script owns its own options and thresholds; the config file is
     // still handed over via __ENV.CFG in case the script wants to read it.
+    const env = scriptEnv(ctx.config.script);
+
     let scriptPath = SCRIPT;
     if (usesCustomScript(ctx.config.script)) {
       scriptPath = await materializeScript(ctx.config.script, dir, "script.js");
       ctx.log("info", `custom k6 script: ${scriptPath}`);
-      for (const tip of suggestK6Script(ctx.config.script.content)) {
+      // A `path` script carries no content in the profile, so lint what is
+      // actually about to run rather than an empty string.
+      const text =
+        ctx.config.script.mode === "path"
+          ? await readFile(scriptPath, "utf8").catch(() => "")
+          : ctx.config.script.content;
+      for (const tip of suggestK6Script(text, Object.keys(env))) {
         ctx.log(tip.level, `suggestion: ${tip.message}`);
       }
     }
@@ -69,13 +77,21 @@ export const k6Runner: Runner = {
       `CFG=${cfgPath}`,
       "--env",
       `SUMMARY_OUT=${summaryPath}`,
+      ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]),
       scriptPath,
     ];
-    ctx.log("info", `k6 ${args.join(" ")}`);
+    // A script variable can hold a token, so the command line is logged with
+    // the user's own values masked — names are enough to debug a run.
+    ctx.log("info", `k6 ${maskEnvValues(args, new Set(Object.keys(env))).join(" ")}`);
 
     const child = spawn(bin, args, {
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      // k6 resolves the file outputs of handleSummary() against the working
+      // directory. Running from the run's own temp dir keeps a custom script's
+      // summary where readK6Summary can still find it, instead of dropping it
+      // into whatever directory the dashboard was started from.
+      cwd: dir,
     });
     let exited = false;
     let exitCode: number | null = null;
@@ -122,17 +138,78 @@ export const k6Runner: Runner = {
             : undefined,
     };
 
-    try {
-      const raw = await readFile(summaryPath, "utf8");
-      applyNativeSummary(JSON.parse(raw) as K6Summary, ctx, result);
-    } catch {
-      ctx.log("warn", "k6 summary not produced — live metrics only");
-    }
+    const summary = await readK6Summary(dir, summaryPath, ctx);
+    if (summary) applyNativeSummary(summary, ctx, result);
+    else ctx.log("warn", "k6 summary not produced — live metrics only");
 
     await rm(dir, { recursive: true, force: true });
     return result;
   },
 };
+
+/** Variable names whose value is a credential often enough to never log it. */
+const SECRET_ENV_NAME = /TOKEN|SECRET|PASS|KEY|AUTH|CREDENTIAL|COOKIE/i;
+
+/**
+ * The command line as logged. A script variable holding a target URL or a rate
+ * is the most useful thing in the log; one holding a credential must never
+ * reach it, and the run log is persisted and exported.
+ */
+function maskEnvValues(args: string[], names: Set<string>): string[] {
+  return args.map((arg, i) => {
+    if (i === 0 || args[i - 1] !== "--env") return arg;
+    const eq = arg.indexOf("=");
+    if (eq <= 0) return arg;
+    const name = arg.slice(0, eq);
+    return names.has(name) && SECRET_ENV_NAME.test(name)
+      ? `${name}=***`
+      : arg;
+  });
+}
+
+/**
+ * k6's end-of-run summary.
+ *
+ * The built-in script — and any custom one that follows the suggestion — writes
+ * it to `SUMMARY_OUT`. Scripts written for a CLI run instead carry their own
+ * `handleSummary()` returning a fixed filename; those land in the run's temp
+ * directory (see `cwd` above), so the thresholds and custom metrics of a
+ * bring-your-own script are still recovered rather than lost.
+ */
+async function readK6Summary(
+  dir: string,
+  summaryPath: string,
+  ctx: RunnerContext,
+): Promise<K6Summary | null> {
+  try {
+    return JSON.parse(await readFile(summaryPath, "utf8")) as K6Summary;
+  } catch {
+    // Not written — fall back to whatever the script produced on its own.
+  }
+
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return null;
+  }
+  for (const name of names) {
+    // config.json is ours; metrics.ndjson is the raw point stream.
+    if (!name.endsWith(".json") || name === "config.json") continue;
+    try {
+      const parsed = JSON.parse(
+        await readFile(join(dir, name), "utf8"),
+      ) as K6Summary;
+      if (parsed && typeof parsed.metrics === "object" && parsed.metrics) {
+        ctx.log("info", `summary read from the script's own output: ${name}`);
+        return parsed;
+      }
+    } catch {
+      // Not JSON, or not a summary — keep looking.
+    }
+  }
+  return null;
+}
 
 function lines(b: Buffer): string[] {
   return b
@@ -260,8 +337,13 @@ function applyNativeSummary(
     }
     // Anything outside the built-in set is a custom Counter/Gauge/Rate/Trend
     // from a bring-your-own script — pass its reported values through as-is
-    // rather than guessing a fixed shape per metric type.
-    if (!CORE_K6_METRICS.has(metric) && m.values) {
+    // rather than guessing a fixed shape per metric type. k6 names a submetric
+    // `parent{tag:value}`, so the check is on the parent: a slice of
+    // http_req_duration is not a custom metric, but one of a custom trend is.
+    const base = metric.includes("{")
+      ? metric.slice(0, metric.indexOf("{"))
+      : metric;
+    if (!CORE_K6_METRICS.has(base) && m.values) {
       const values: Record<string, number> = {};
       for (const [k, v] of Object.entries(m.values))
         if (typeof v === "number") values[k] = v;
@@ -287,8 +369,26 @@ interface ScriptTip {
  * silently-dropped iterations, un-thresholded custom metrics) are worth
  * flagging up front rather than discovered after a long run.
  */
-export function suggestK6Script(content: string): ScriptTip[] {
+export function suggestK6Script(
+  content: string,
+  envNames: string[] = [],
+): ScriptTip[] {
   const tips: ScriptTip[] = [];
+
+  // A script parameterised through __ENV silently falls back to its own
+  // defaults when a variable is missing — a 30-minute run against the wrong
+  // host looks perfectly healthy until someone reads the target.
+  const referenced = new Set(
+    [...content.matchAll(/__ENV\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]),
+  );
+  const provided = new Set([...envNames, "CFG", "SUMMARY_OUT"]);
+  const missing = [...referenced].filter((n) => !provided.has(n));
+  if (missing.length) {
+    tips.push({
+      level: "info",
+      message: `script reads __ENV ${missing.join(", ")} \u2014 not set for this run, so the script\u2019s own defaults apply; set them under environment variables to drive the run from the dashboard`,
+    });
+  }
 
   const hasHandleSummary = /export\s+function\s+handleSummary/.test(content);
   if (!hasHandleSummary) {
@@ -299,9 +399,17 @@ export function suggestK6Script(content: string): ScriptTip[] {
     });
   } else if (!content.includes("SUMMARY_OUT")) {
     tips.push({
-      level: "warn",
+      level: "info",
       message:
-        "handleSummary() does not write to __ENV.SUMMARY_OUT \u2014 the dashboard reads the run summary from that path, so thresholds/custom metrics will show live data only, never a final verdict",
+        "handleSummary() does not write to __ENV.SUMMARY_OUT \u2014 the dashboard falls back to any summary JSON the script leaves in the run directory, but writing to that path is what guarantees it is found",
+    });
+  }
+
+  if (hasHandleSummary && /stdout\s*:\s*JSON\.stringify/.test(content)) {
+    tips.push({
+      level: "info",
+      message:
+        "handleSummary() writes the whole summary to stdout \u2014 every line of it lands in this run\u2019s log; drop the stdout key (or use textSummary) to keep the log readable",
     });
   }
 
