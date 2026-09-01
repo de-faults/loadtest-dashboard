@@ -57,6 +57,31 @@ export interface ThresholdResult {
   passed: boolean;
 }
 
+/**
+ * Attribution for a failed response: which hop answered. A run aimed at a
+ * service usually passes through a gateway (Azure APIM, APISIX/API7, an
+ * ingress, a CDN) that can answer in the service's place, and a status code
+ * alone never says which one did.
+ */
+export interface ErrorOrigin {
+  /** `gateway`: a hop in front answered. `service`: the target itself did. */
+  verdict: "gateway" | "service" | "unknown";
+  /** Best name for whoever produced the response, when one is identifiable. */
+  by?: string;
+  /** The proxy detected in the path, whether or not it wrote this response. */
+  gateway?: string;
+  /** Header lines and body markers the verdict was drawn from. */
+  evidence: string[];
+  /** Correlation ids for finding this call in the gateway's own logs. */
+  traceIds?: Record<string, string>;
+  /** Address that actually answered — a gateway VIP is not the service host. */
+  remoteIp?: string;
+  remotePort?: number;
+  proto?: string;
+  /** Final URL, after any redirect. */
+  url?: string;
+}
+
 export interface ErrorBucket {
   kind: string;
   count: number;
@@ -79,6 +104,8 @@ export interface ErrorBucket {
   bodyChars?: number;
   /** `body` holds only the head of the payload — the rest was dropped. */
   bodyTruncated?: boolean;
+  /** Who answered: the service under test, or a gateway in front of it. */
+  origin?: ErrorOrigin;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
-  ErrorBucket, Profile, Protocol, RunEvent, RunState, RunSummary, WindowMetrics,
+  ErrorBucket, ErrorOrigin, Profile, Protocol, RunEvent, RunState, RunSummary, WindowMetrics,
 } from '@shared/types.ts';
 import { api, csvUrl, type RunDetail } from '../lib/api.ts';
 import { useEventStream } from '../lib/sse.ts';
@@ -67,6 +67,47 @@ function paneFromDetail(d: RunDetail): Pane {
  * Folded away: the table is a count of failure kinds, the payload is the thing
  * you open when the count is not enough.
  */
+/**
+ * Attribution line: which hop answered. When a gateway sits in front of the
+ * service, this is the difference between "our service is broken" and "we never
+ * reached it" — so it leads the panel, above the payload it explains.
+ */
+function ErrorOriginLine({ origin }: { origin: ErrorOrigin }) {
+  const { t } = useTranslation();
+  const traceIds = Object.entries(origin.traceIds ?? {});
+  const tone = origin.verdict === 'gateway' ? 'warn' : origin.verdict === 'service' ? 'fail' : 'muted';
+  return (
+    <div className="err-origin">
+      <div className="err-origin-head">
+        <Badge tone={tone}>{t(`run.origin.${origin.verdict}`)}</Badge>
+        <strong>{origin.by ?? t('run.origin.unnamed')}</strong>
+        {origin.gateway && origin.gateway !== origin.by
+          ? <span className="err-origin-via">{t('run.origin.through', { name: origin.gateway })}</span>
+          : null}
+      </div>
+      <div className="err-origin-meta mono">
+        {[
+          origin.remoteIp ? `${origin.remoteIp}${origin.remotePort ? `:${origin.remotePort}` : ''}` : '',
+          origin.proto ?? '',
+          origin.url ?? '',
+        ].filter(Boolean).join(' · ')}
+      </div>
+      {origin.evidence.length ? (
+        <div className="err-origin-meta">
+          <span className="err-origin-label">{t('run.origin.evidence')}</span>
+          <span className="mono">{origin.evidence.join(' · ')}</span>
+        </div>
+      ) : null}
+      {traceIds.length ? (
+        <div className="err-origin-meta">
+          <span className="err-origin-label">{t('run.origin.traceIds')}</span>
+          <span className="mono">{traceIds.map(([k, v]) => `${k}: ${v}`).join(' · ')}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ErrorBody({ bucket }: { bucket: ErrorBucket }) {
   const { t } = useTranslation();
   const headers = Object.entries(bucket.responseHeaders ?? {});
@@ -77,6 +118,7 @@ function ErrorBody({ bucket }: { bucket: ErrorBucket }) {
         {bucket.bodyContentType ? ` · ${bucket.bodyContentType}` : ''}
         {bucket.bodyChars != null ? ` · ${num(bucket.bodyChars)} ch` : ''}
       </summary>
+      {bucket.origin ? <ErrorOriginLine origin={bucket.origin} /> : null}
       {headers.length ? (
         <div className="err-headers">
           <div className="section-title">{t('run.errorHeaders')}</div>
@@ -551,6 +593,13 @@ export function RunView(props: {
                             <td className="r v-red">{num(e.count)}</td>
                             <td style={{ maxWidth: 320 }}>
                               <div className="ellipsis" title={e.sample}>{e.sample}</div>
+                              {e.origin ? (
+                                <div className="err-origin-tag">
+                                  {t('run.origin.from', {
+                                    name: e.origin.by ?? t(`run.origin.${e.origin.verdict}`),
+                                  })}
+                                </div>
+                              ) : null}
                               {e.body != null ? <ErrorBody bucket={e} /> : null}
                             </td>
                           </tr>

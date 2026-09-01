@@ -128,7 +128,17 @@
     "runsConcurrently": "Selected profiles all start at once and share this machine — their latency figures do affect each other.",
     "errorBody": "Response body",
     "errorBodyEmpty": "The target replied with an empty body.",
-    "errorHeaders": "Response headers"
+    "errorHeaders": "Response headers",
+    "origin": {
+      "gateway": "Gateway answered",
+      "service": "Service answered",
+      "unknown": "Source unclear",
+      "unnamed": "unidentified hop",
+      "through": "through {{name}}",
+      "evidence": "Evidence",
+      "traceIds": "Trace ids",
+      "from": "from {{name}}"
+    }
   },
   "config": {
     "title": "Test profiles",
