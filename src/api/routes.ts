@@ -22,6 +22,7 @@ import { monitorStatus, startMonitor, stopMonitor } from "../kafka/monitor.ts";
 import { importKafkaAuth } from "../kafka/authImport.ts";
 import { exampleScript } from "../runners/script.ts";
 import { probeSocket } from "../runners/socketProbe.ts";
+import { installTool, toolsInfo } from "../runners/install.ts";
 import {
   detectProtocol,
   exportScript,
@@ -82,6 +83,25 @@ export function registerRoutes(app: FastifyInstance): void {
       timeseries: csv.TIMESERIES_COLUMNS,
     },
   }));
+  // ─── External tools ───────────────────────────────────────────────────────
+  app.get("/api/tools", async () => toolsInfo());
+
+  /**
+   * Install one tool with one of its own recipes. The body names a tool and a
+   * method *id*; the command itself is a constant on the server, so nothing
+   * here can be turned into arbitrary command execution.
+   */
+  app.post("/api/tools/install", async (req, reply) => {
+    const body = req.body as { tool?: unknown; method?: unknown };
+    if (typeof body?.tool !== "string" || typeof body?.method !== "string")
+      return reply.code(400).send({ error: "tool and method are required" });
+    try {
+      return await installTool(body.tool, body.method);
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message });
+    }
+  });
+
   app.get("/api/defaults/:protocol", async (req, reply) => {
     const { protocol } = req.params as { protocol: string };
     if (!["rest", "socket", "kafka"].includes(protocol))

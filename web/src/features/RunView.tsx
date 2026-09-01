@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Profile, Protocol, RunEvent, RunState, RunSummary, WindowMetrics } from '@shared/types.ts';
+import type {
+  ErrorBucket, Profile, Protocol, RunEvent, RunState, RunSummary, WindowMetrics,
+} from '@shared/types.ts';
 import { api, csvUrl, type RunDetail } from '../lib/api.ts';
 import { useEventStream } from '../lib/sse.ts';
 import { compact, dateTime, duration, ms, num, pct, timeOnly } from '../lib/format.ts';
@@ -58,6 +60,41 @@ function paneFromDetail(d: RunDetail): Pane {
         ),
     detail: d,
   };
+}
+
+/**
+ * What the target actually replied to the first request that failed this way.
+ * Folded away: the table is a count of failure kinds, the payload is the thing
+ * you open when the count is not enough.
+ */
+function ErrorBody({ bucket }: { bucket: ErrorBucket }) {
+  const { t } = useTranslation();
+  const headers = Object.entries(bucket.responseHeaders ?? {});
+  return (
+    <details className="doc-block">
+      <summary>
+        {t('run.errorBody')}
+        {bucket.bodyContentType ? ` · ${bucket.bodyContentType}` : ''}
+        {bucket.bodyChars != null ? ` · ${num(bucket.bodyChars)} ch` : ''}
+      </summary>
+      {headers.length ? (
+        <div className="err-headers">
+          <div className="section-title">{t('run.errorHeaders')}</div>
+          {headers.map(([name, value]) => (
+            <div key={name} className="err-header mono">
+              <span className="err-header-name">{name}</span>
+              <span>{value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {bucket.body ? (
+        <pre className="logs err-body">{bucket.body}{bucket.bodyTruncated ? '\n…' : ''}</pre>
+      ) : (
+        <div className="doc-line">{t('run.errorBodyEmpty')}</div>
+      )}
+    </details>
+  );
 }
 
 export function RunView(props: {
@@ -512,7 +549,10 @@ export function RunView(props: {
                           <tr key={e.kind}>
                             <td className="mono">{e.kind}</td>
                             <td className="r v-red">{num(e.count)}</td>
-                            <td style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.sample}</td>
+                            <td style={{ maxWidth: 320 }}>
+                              <div className="ellipsis" title={e.sample}>{e.sample}</div>
+                              {e.body != null ? <ErrorBody bucket={e} /> : null}
+                            </td>
                           </tr>
                         ))}
                       </tbody>

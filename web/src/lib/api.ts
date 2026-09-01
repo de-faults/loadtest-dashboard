@@ -1,6 +1,6 @@
 import type {
-  AppSettings, KafkaAuth, Profile, Protocol, RunConfig, RunRow, RunSummary,
-  RunnerAvailability, SocketConfig, WindowMetrics,
+  AppSettings, InstallResult, KafkaAuth, Profile, Protocol, RunConfig, RunRow,
+  RunSummary, RunnerAvailability, SocketConfig, ToolsInfo, WindowMetrics,
 } from '@shared/types.ts';
 
 export interface SocketProbe {
@@ -61,6 +61,11 @@ export const api = {
     headerHints: string[];
     headerValueHints: Record<string, string[]>;
   }>('/api/meta'),
+
+  tools: () => req<ToolsInfo>('/api/tools'),
+  /** Runs a fixed server-side recipe; can take minutes on a cold package manager. */
+  installTool: (tool: string, method: string) =>
+    req<InstallResult>('/api/tools/install', { method: 'POST', body: JSON.stringify({ tool, method }) }),
 
   settings: () => req<AppSettings>('/api/settings'),
   saveSettings: (patch: Partial<AppSettings>) =>

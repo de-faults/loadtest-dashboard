@@ -18,6 +18,18 @@ interface ScenarioAcc {
   hist: Histogram;
 }
 
+/** One captured error payload, as reported by the runner. */
+export interface ErrorBody {
+  body: string;
+  contentType?: string;
+  /** Response headers, already redacted by the runner. */
+  headers?: Record<string, string>;
+  /** Characters the target sent, counted before truncation. */
+  chars?: number;
+  /** `body` is only the head of what the target sent. */
+  truncated?: boolean;
+}
+
 export interface Sample {
   ts: number;
   latencyMs: number;
@@ -53,6 +65,12 @@ export class Aggregator {
 
   readonly checks = new Map<string, { passed: number; failed: number }>();
   readonly errors = new Map<string, { count: number; sample: string }>();
+  /**
+   * First response body seen per error kind. Kept apart from `errors` because
+   * the body arrives on a different path than the count (k6 streams the failed
+   * sample, the script logs the payload) and may land either side of it.
+   */
+  private readonly errorBodies = new Map<string, ErrorBody>();
   /**
    * Per-scenario totals, for runners that attribute their work to a named
    * scenario. Capped so an unexpected tag cardinality cannot grow without
@@ -173,6 +191,16 @@ export class Aggregator {
   }
 
   /**
+   * Attach the response payload of a failed request to its bucket. Never
+   * creates a bucket and never counts: the failure itself is counted by
+   * `addError`, which may run before or after this.
+   */
+  attachErrorBody(kind: string, body: ErrorBody): void {
+    if (this.errorBodies.has(kind)) return;
+    this.errorBodies.set(kind, body);
+  }
+
+  /**
    * Close the current 1s window. Returns null when no window boundary has been
    * crossed yet, so callers can poll on any cadence.
    */
@@ -262,7 +290,25 @@ export class Aggregator {
 
   errorBuckets(): ErrorBucket[] {
     return [...this.errors.entries()]
-      .map(([kind, e]) => ({ kind, count: e.count, sample: e.sample }))
+      .map(([kind, e]) => {
+        const b = this.errorBodies.get(kind);
+        return {
+          kind,
+          count: e.count,
+          sample: e.sample,
+          ...(b
+            ? {
+                body: b.body,
+                ...(b.contentType ? { bodyContentType: b.contentType } : {}),
+                ...(b.headers && Object.keys(b.headers).length
+                  ? { responseHeaders: b.headers }
+                  : {}),
+                ...(b.chars != null ? { bodyChars: b.chars } : {}),
+                ...(b.truncated ? { bodyTruncated: true } : {}),
+              }
+            : {}),
+        };
+      })
       .sort((a, b) => b.count - a.count);
   }
 

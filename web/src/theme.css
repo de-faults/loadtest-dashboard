@@ -345,6 +345,14 @@ pre.logs { white-space: pre; }
 .log-line { white-space: pre-wrap; word-break: break-all; }
 .log-warn { color: var(--yellow); } .log-error { color: var(--red); }
 .log-ts { color: var(--text-faint); margin-right: 6px; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Captured error payload: wraps, unlike the log tail which must keep its columns. */
+pre.err-body { white-space: pre-wrap; word-break: break-word; max-height: 220px; }
+/* Response headers of the captured failure — name in a fixed column, value wraps. */
+.err-headers { max-height: 160px; overflow: auto; margin-bottom: 6px; }
+.err-header { display: flex; gap: 8px; font-size: 11px; line-height: 1.6; }
+.err-header-name { flex: 0 0 34%; color: var(--text-weak); word-break: break-all; }
+.err-header > span:last-child { min-width: 0; word-break: break-all; }
 
 .bar-track { background: var(--bg-alt); border-radius: 2px; height: 7px; overflow: hidden; min-width: 60px; }
 .bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
@@ -647,6 +655,20 @@ pre.logs { white-space: pre; }
 @media (max-width: 700px) {
   .run-tab-name { max-width: 120px; }
 }
+
+/* ── Tool install cards ───────────────────────────────────────────────────
+   One card per external binary: state on top, one row per install recipe. */
+.tool-card {
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--panel-alt); padding: 8px 10px; margin-top: 8px;
+}
+.tool-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tool-detail { color: var(--text-faint); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tool-docs { margin-left: auto; font-size: 11px; color: var(--text-weak); }
+.tool-method { margin-top: 8px; }
+.tool-method-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tool-reason { color: var(--yellow); font-size: 11px; }
+pre.tool-cmd { margin-top: 6px; max-height: 120px; }
 
 /* ── Inline reference block ───────────────────────────────────────────────
    Folded away by default: it is documentation, not part of the form. */

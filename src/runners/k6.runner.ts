@@ -16,6 +16,54 @@ const SCRIPT = join(HERE, "assets", "k6-script.js");
 /** k6 exits 99 when a threshold was crossed. */
 const K6_THRESHOLD_EXIT = 99;
 
+/**
+ * Error-payload capture, as handed to the built-in script.
+ *
+ * `maxSamples` is per VU and the script only ever emits the first request of
+ * each failure kind, so the ceiling is small even under heavy load; the runner
+ * keeps the first body per kind and logs at most ERROR_BODY_LOG_MAX of them.
+ */
+const ERROR_BODY = {
+  enabled: true,
+  maxChars: 2000,
+  maxSamples: 2,
+  maxHeaders: 40,
+  headerChars: 300,
+};
+/**
+ * The script's marker, as it survives k6's log formatter: console output is
+ * re-emitted as `msg="…"` (Go-escaped), so the payload travels base64 and is
+ * pulled back out by shape rather than by position on the line.
+ */
+const ERROR_BODY_MARK = /@@LTD_ERRBODY@@([A-Za-z0-9+/=]+)/;
+const ERROR_BODY_LOG_MAX = 10;
+/** One line of a body, as echoed into the run log. */
+const ERROR_BODY_LOG_CHARS = 600;
+/** Headers echoed into the run log; the rest stay in the summary. */
+const ERROR_HEADER_LOG_MAX = 8;
+
+/**
+ * Response headers whose value is a credential or a session handle. The error
+ * sample is persisted with the run and exported to CSV, so these are stored
+ * redacted — the header's presence is the diagnostic, its value is not.
+ */
+const SECRET_HEADER_NAME =
+  /^set-cookie$|^cookie$|^authorization$|^proxy-authorization$|token|secret|api-?key|^x-amz-security|session/i;
+
+interface ErrorBodyReport {
+  kind: string;
+  status?: number;
+  error?: string;
+  contentType?: string;
+  /** Response headers as the target sent them, capped by the script. */
+  headers?: Record<string, string>;
+  /** Characters the target sent, counted before truncation. */
+  chars?: number;
+  /** The script cut the payload down to its capture limit. */
+  truncated?: boolean;
+  body?: string;
+}
+
 interface K6Point {
   type: string;
   metric: string;
@@ -101,11 +149,44 @@ export const k6Runner: Runner = {
     };
     ctx.signal.addEventListener("abort", onAbort, { once: true });
 
+    // k6 writes console.log() to stderr, so the marker is looked for on both
+    // streams rather than assuming which one carries it.
+    let bodiesLogged = 0;
+    const onLine = (level: "info" | "warn", line: string): void => {
+      const mark = ERROR_BODY_MARK.exec(line);
+      if (!mark) {
+        ctx.log(level, line);
+        return;
+      }
+      const report = parseErrorBody(mark[1]);
+      if (!report) {
+        // The line is an unreadable capture, and it may carry a Set-Cookie —
+        // log that it happened, never its contents.
+        ctx.log("warn", "error-body capture could not be decoded");
+        return;
+      }
+      ctx.errorBody(report.kind, {
+        body: report.body ?? "",
+        ...(report.headers
+          ? { headers: maskErrorHeaders(report.headers) }
+          : {}),
+        ...(report.contentType ? { contentType: report.contentType } : {}),
+        ...(typeof report.chars === "number" ? { chars: report.chars } : {}),
+        ...(report.truncated ? { truncated: true } : {}),
+      });
+      // Also surface it in the log — a run that is failing right now is read
+      // there, long before anyone opens the summary.
+      if (bodiesLogged < ERROR_BODY_LOG_MAX) {
+        bodiesLogged++;
+        ctx.log("warn", describeErrorBody(report));
+      }
+    };
+
     child.stdout.on("data", (b: Buffer) =>
-      lines(b).forEach((l) => ctx.log("info", l)),
+      lines(b).forEach((l) => onLine("info", l)),
     );
     child.stderr.on("data", (b: Buffer) =>
-      lines(b).forEach((l) => ctx.log("warn", l)),
+      lines(b).forEach((l) => onLine("warn", l)),
     );
 
     const exitPromise = new Promise<number | null>((resolve) => {
@@ -209,6 +290,53 @@ async function readK6Summary(
     }
   }
   return null;
+}
+
+function parseErrorBody(b64: string): ErrorBodyReport | null {
+  try {
+    const p = JSON.parse(
+      Buffer.from(b64, "base64").toString("utf8"),
+    ) as ErrorBodyReport;
+    return p && typeof p.kind === "string" ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Credential-bearing header values never reach the store or the log. */
+export function maskErrorHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers))
+    out[name] = SECRET_HEADER_NAME.test(name) ? "***" : value;
+  return out;
+}
+
+/** The captured payload as one log line: newlines would break the tail. */
+function describeErrorBody(r: ErrorBodyReport): string {
+  const head = [
+    `error body [${r.kind}]`,
+    r.status != null ? `status=${r.status}` : "",
+    r.error ? `transport=${r.error}` : "",
+    r.contentType ? `content-type=${r.contentType}` : "",
+    typeof r.chars === "number" ? `chars=${r.chars}` : "",
+    r.truncated ? "truncated" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const headers = Object.entries(maskErrorHeaders(r.headers ?? {}))
+    .slice(0, ERROR_HEADER_LOG_MAX)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join("; ");
+  const body = (r.body ?? "").replace(/\s+/g, " ").trim();
+  const withHeaders = headers ? `${head} — ${headers}` : head;
+  if (!body) return `${withHeaders} — empty body`;
+  const shown =
+    body.length > ERROR_BODY_LOG_CHARS
+      ? `${body.slice(0, ERROR_BODY_LOG_CHARS)}…`
+      : body;
+  return `${withHeaders} — ${shown}`;
 }
 
 function lines(b: Buffer): string[] {
@@ -502,6 +630,7 @@ function buildScriptConfig(
     followRedirects: cfg.followRedirects,
     thinkTimeMs: cfg.thinkTimeMs,
     checks: ctx.config.checks,
+    errorBody: ERROR_BODY,
     k6Options,
   };
 }

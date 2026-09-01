@@ -61,6 +61,24 @@ export interface ErrorBucket {
   kind: string;
   count: number;
   sample: string;
+  /**
+   * The response the target actually sent for the first request that failed
+   * this way — truncated. A status code alone rarely says why a load test is
+   * failing; the error payload usually does.
+   */
+  body?: string;
+  /** Content-Type of `body`, when the target sent one. */
+  bodyContentType?: string;
+  /**
+   * Response headers of that same first failure. Values of credential-bearing
+   * headers (Set-Cookie, Authorization, anything token/secret/key-shaped) are
+   * stored as `***`: the summary is persisted and exported.
+   */
+  responseHeaders?: Record<string, string>;
+  /** Characters the target sent, counted before truncation. */
+  bodyChars?: number;
+  /** `body` holds only the head of the payload — the rest was dropped. */
+  bodyTruncated?: boolean;
 }
 
 /**
@@ -142,6 +160,7 @@ export type RunEvent =
       kind: string;
       message: string;
       count: number;
+      body?: string;
     }
   | {
       t: "log";
@@ -428,6 +447,50 @@ export interface AppSettings {
   artilleryPath: string;
   retentionRuns: number;
   kafkaMonitorIntervalSec: number;
+}
+
+// ─── External tools ──────────────────────────────────────────────────────────
+
+export type ToolId = "k6" | "artillery";
+/** Platforms with their own install recipes; anything else is "other". */
+export type ToolPlatform = "darwin" | "win32" | "linux" | "other";
+
+export interface ToolInstallMethod {
+  id: string;
+  /** Package manager behind it, e.g. "Homebrew". */
+  label: string;
+  /** The recipe as shell text — for the copy button, never sent back to run. */
+  command: string;
+  /** False when the dashboard cannot run it unattended; `reason` says why. */
+  runnable: boolean;
+  reason?: string;
+  note?: string;
+  needsSudo: boolean;
+}
+
+export interface ToolStatus {
+  id: ToolId;
+  label: string;
+  /** The binary a run would spawn — the configured path, not just the name. */
+  binPath: string;
+  docsUrl: string;
+  available: boolean;
+  detail: string;
+  methods: ToolInstallMethod[];
+}
+
+export interface ToolsInfo {
+  platform: ToolPlatform;
+  tools: ToolStatus[];
+}
+
+export interface InstallResult {
+  /** The tool answered its version afterwards — the only proof that counts. */
+  ok: boolean;
+  /** Exit code of the last step, or null when it could not be spawned. */
+  code: number | null;
+  output: string[];
+  status: ToolStatus;
 }
 
 export interface RunnerAvailability {

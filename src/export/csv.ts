@@ -110,6 +110,11 @@ const HEADERS_TH: Record<string, string> = {
   kind: "ประเภท",
   count: "จำนวน",
   sample: "ตัวอย่างข้อความ",
+  body: "เนื้อหาที่ตอบกลับ",
+  content_type: "ชนิดเนื้อหา",
+  chars: "จำนวนอักขระ",
+  response_headers: "เฮดเดอร์ที่ตอบกลับ",
+  truncated: "ตัดข้อความ",
   type: "ประเภท",
   key: "รายการ",
   value: "ค่า",
@@ -284,11 +289,36 @@ export function errorsCsv(s: RunSummary, o: CsvOptions): string {
   let out =
     BOM +
     row(
-      ["run_id", "kind", "count", "sample"].map((c) => header(c, o.language)),
+      [
+        "run_id",
+        "kind",
+        "count",
+        "sample",
+        "body",
+        "content_type",
+        "chars",
+        "truncated",
+        "response_headers",
+      ].map((c) => header(c, o.language)),
       o.delimiter,
     );
   for (const e of s.errors)
-    out += row([s.runId, e.kind, e.count, e.sample], o.delimiter);
+    out += row(
+      [
+        s.runId,
+        e.kind,
+        e.count,
+        e.sample,
+        e.body ?? "",
+        e.bodyContentType ?? "",
+        e.bodyChars ?? "",
+        e.body == null ? "" : Boolean(e.bodyTruncated),
+        Object.entries(e.responseHeaders ?? {})
+          .map(([k, v]) => `${k}: ${v}`)
+          .join("\n"),
+      ],
+      o.delimiter,
+    );
   return out;
 }
 

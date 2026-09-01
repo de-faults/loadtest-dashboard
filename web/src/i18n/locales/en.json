@@ -46,7 +46,8 @@
     "actions": "Actions",
     "newProfile": "New test profile",
     "confirmDelete": "Delete this permanently?",
-    "clear": "Clear"
+    "clear": "Clear",
+    "refresh": "Refresh"
   },
   "protocol": {
     "rest": "REST (k6)",
@@ -124,7 +125,10 @@
     "nRunning": "{{count}} running",
     "stopAll": "Stop all",
     "closeTab": "Close this tab (the run keeps going)",
-    "runsConcurrently": "Selected profiles all start at once and share this machine — their latency figures do affect each other."
+    "runsConcurrently": "Selected profiles all start at once and share this machine — their latency figures do affect each other.",
+    "errorBody": "Response body",
+    "errorBodyEmpty": "The target replied with an empty body.",
+    "errorHeaders": "Response headers"
   },
   "config": {
     "title": "Test profiles",
@@ -350,7 +354,18 @@
     "runners": "Runner availability",
     "comma": "Comma (,)",
     "semicolon": "Semicolon (;)",
-    "tab": "Tab"
+    "tab": "Tab",
+    "tools": "Install tools",
+    "toolsHint": "Runs a fixed install command on the machine hosting the dashboard. Recipes that need a root password cannot be run from here — copy them into a terminal instead.",
+    "install": "Install",
+    "installing": "Installing…",
+    "copy": "Copy command",
+    "copied": "Copied",
+    "installOutput": "Install output",
+    "installed": "{{tool}} installed",
+    "installFailed": "{{tool}} was not installed",
+    "noMethod": "No install recipe for this platform — see the tool documentation.",
+    "docs": "Docs"
   },
   "errors": {
     "runFailed": "Could not start the run",

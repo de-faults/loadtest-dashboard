@@ -189,6 +189,9 @@ function launch(
         count: 1,
       });
     },
+    errorBody(kind, body) {
+      agg.attachErrorBody(kind, body);
+    },
   };
 
   active.set(runId, {

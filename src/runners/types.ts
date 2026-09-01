@@ -1,4 +1,4 @@
-import type { Aggregator } from "../metrics/aggregator.ts";
+import type { Aggregator, ErrorBody } from "../metrics/aggregator.ts";
 import type { CustomMetricResult, RunConfig } from "../shared/types.ts";
 
 export interface RunnerContext {
@@ -9,6 +9,12 @@ export interface RunnerContext {
   log(level: "info" | "warn" | "error", line: string): void;
   /** Record a protocol-level failure, bucketed by kind. */
   error(kind: string, message: string): void;
+  /**
+   * Attach what the target actually replied to the bucket `kind`, so a failing
+   * run shows the error payload and not just its status code. Does not count
+   * as a failure on its own — `error()` does that.
+   */
+  errorBody(kind: string, body: ErrorBody): void;
   /** Resolves when the user pressed Stop. */
   signal: AbortSignal;
 }
