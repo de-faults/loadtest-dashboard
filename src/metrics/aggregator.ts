@@ -5,7 +5,7 @@
 
 import { Histogram } from './histogram.ts';
 import type {
-  CheckResult, ErrorBucket, LatencyProfile, ScenarioStat, WindowMetrics,
+  CheckResult, ErrorBucket, ErrorOrigin, LatencyProfile, ScenarioStat, WindowMetrics,
 } from '../shared/types.ts';
 
 /** Upper bound on distinct scenario names kept, so a stray tag cannot grow the map without limit. */
@@ -28,6 +28,8 @@ export interface ErrorBody {
   chars?: number;
   /** `body` is only the head of what the target sent. */
   truncated?: boolean;
+  /** Which hop produced the response, as classified by the runner. */
+  origin?: ErrorOrigin;
 }
 
 export interface Sample {
@@ -304,6 +306,7 @@ export class Aggregator {
                   ? { responseHeaders: b.headers }
                   : {}),
                 ...(b.chars != null ? { bodyChars: b.chars } : {}),
+                ...(b.origin ? { origin: b.origin } : {}),
                 ...(b.truncated ? { bodyTruncated: true } : {}),
               }
             : {}),

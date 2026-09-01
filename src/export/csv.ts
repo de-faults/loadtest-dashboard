@@ -114,6 +114,11 @@ const HEADERS_TH: Record<string, string> = {
   content_type: "ชนิดเนื้อหา",
   chars: "จำนวนอักขระ",
   response_headers: "เฮดเดอร์ที่ตอบกลับ",
+  answered_by: "ผู้ตอบกลับ",
+  origin: "แหล่งที่มาของ error",
+  origin_evidence: "หลักฐาน",
+  answered_from: "ที่อยู่ที่ตอบกลับ",
+  trace_ids: "รหัสอ้างอิง",
   truncated: "ตัดข้อความ",
   type: "ประเภท",
   key: "รายการ",
@@ -299,6 +304,11 @@ export function errorsCsv(s: RunSummary, o: CsvOptions): string {
         "chars",
         "truncated",
         "response_headers",
+        "origin",
+        "answered_by",
+        "answered_from",
+        "origin_evidence",
+        "trace_ids",
       ].map((c) => header(c, o.language)),
       o.delimiter,
     );
@@ -314,6 +324,15 @@ export function errorsCsv(s: RunSummary, o: CsvOptions): string {
         e.bodyChars ?? "",
         e.body == null ? "" : Boolean(e.bodyTruncated),
         Object.entries(e.responseHeaders ?? {})
+          .map(([k, v]) => `${k}: ${v}`)
+          .join("\n"),
+        e.origin?.verdict ?? "",
+        e.origin?.by ?? "",
+        e.origin?.remoteIp
+          ? `${e.origin.remoteIp}${e.origin.remotePort ? `:${e.origin.remotePort}` : ""}`
+          : "",
+        (e.origin?.evidence ?? []).join("\n"),
+        Object.entries(e.origin?.traceIds ?? {})
           .map(([k, v]) => `${k}: ${v}`)
           .join("\n"),
       ],

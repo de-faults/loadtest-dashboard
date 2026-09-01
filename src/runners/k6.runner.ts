@@ -7,8 +7,9 @@ import { getSettings } from "../store/db.ts";
 import { toK6Thresholds } from "../metrics/thresholds.ts";
 import { tailLines } from "./tail.ts";
 import { materializeScript, scriptEnv, usesCustomScript } from "./script.ts";
+import { classifyOrigin } from "./errorOrigin.ts";
 import type { Runner, RunnerContext, RunnerResult } from "./types.ts";
-import type { RestConfig } from "../shared/types.ts";
+import type { ErrorOrigin, RestConfig } from "../shared/types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "assets", "k6-script.js");
@@ -57,6 +58,11 @@ interface ErrorBodyReport {
   contentType?: string;
   /** Response headers as the target sent them, capped by the script. */
   headers?: Record<string, string>;
+  /** Address that answered, so a gateway VIP is distinguishable from the service. */
+  remoteIp?: string;
+  remotePort?: number;
+  proto?: string;
+  finalUrl?: string;
   /** Characters the target sent, counted before truncation. */
   chars?: number;
   /** The script cut the payload down to its capture limit. */
@@ -165,10 +171,23 @@ export const k6Runner: Runner = {
         ctx.log("warn", "error-body capture could not be decoded");
         return;
       }
+      // Masked first: classification and every line it produces then work from
+      // headers that can no longer carry a credential.
+      report.headers = maskErrorHeaders(report.headers ?? {});
+      const origin = classifyOrigin({
+        status: report.status,
+        headers: report.headers ?? {},
+        body: report.body,
+        remoteIp: report.remoteIp,
+        remotePort: report.remotePort,
+        proto: report.proto,
+        url: report.finalUrl,
+      });
       ctx.errorBody(report.kind, {
         body: report.body ?? "",
-        ...(report.headers
-          ? { headers: maskErrorHeaders(report.headers) }
+        origin,
+        ...(report.headers && Object.keys(report.headers).length
+          ? { headers: report.headers }
           : {}),
         ...(report.contentType ? { contentType: report.contentType } : {}),
         ...(typeof report.chars === "number" ? { chars: report.chars } : {}),
@@ -178,7 +197,7 @@ export const k6Runner: Runner = {
       // there, long before anyone opens the summary.
       if (bodiesLogged < ERROR_BODY_LOG_MAX) {
         bodiesLogged++;
-        ctx.log("warn", describeErrorBody(report));
+        ctx.log("warn", describeErrorBody(report, origin));
       }
     };
 
@@ -314,9 +333,15 @@ export function maskErrorHeaders(
 }
 
 /** The captured payload as one log line: newlines would break the tail. */
-function describeErrorBody(r: ErrorBodyReport): string {
+function describeErrorBody(r: ErrorBodyReport, origin: ErrorOrigin): string {
+  const from = origin.by
+    ? `from ${origin.by} (${origin.verdict})`
+    : `from ${origin.verdict}`;
   const head = [
-    `error body [${r.kind}]`,
+    `error body [${r.kind}] ${from}`,
+    origin.remoteIp
+      ? `answered-by=${origin.remoteIp}${origin.remotePort ? `:${origin.remotePort}` : ""}`
+      : "",
     r.status != null ? `status=${r.status}` : "",
     r.error ? `transport=${r.error}` : "",
     r.contentType ? `content-type=${r.contentType}` : "",

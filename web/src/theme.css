@@ -348,6 +348,17 @@ pre.logs { white-space: pre; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Captured error payload: wraps, unlike the log tail which must keep its columns. */
 pre.err-body { white-space: pre-wrap; word-break: break-word; max-height: 220px; }
+/* Who answered the failed request — the panel's first line. */
+.err-origin {
+  border: 1px solid var(--border); border-left: 2px solid var(--yellow);
+  border-radius: 3px; padding: 6px 8px; margin-bottom: 6px; background: var(--bg-alt);
+}
+.err-origin-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.err-origin-via { color: var(--text-weak); font-size: 11px; }
+.err-origin-meta { font-size: 11px; color: var(--text-weak); margin-top: 3px; word-break: break-all; }
+.err-origin-label { color: var(--text-faint); margin-right: 6px; }
+.err-origin-tag { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+
 /* Response headers of the captured failure — name in a fixed column, value wraps. */
 .err-headers { max-height: 160px; overflow: auto; margin-bottom: 6px; }
 .err-header { display: flex; gap: 8px; font-size: 11px; line-height: 1.6; }

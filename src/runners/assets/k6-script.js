@@ -172,6 +172,12 @@ function reportErrorBody(res) {
     error: res.error || '',
     contentType: headerOf(res, 'Content-Type'),
     headers: collectHeaders(res),
+    // Who answered. A gateway VIP is not the service host, and after a redirect
+    // the final URL is not the one the profile targets.
+    remoteIp: res.remote_ip || '',
+    remotePort: res.remote_port || 0,
+    proto: res.proto || '',
+    finalUrl: res.url || '',
     chars: raw.length,
     truncated: truncated,
     body: truncated ? raw.slice(0, ERR_MAX_CHARS) : raw,
