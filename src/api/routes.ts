@@ -387,6 +387,14 @@ export function registerRoutes(app: FastifyInstance): void {
       case "scenarios":
         body = csv.scenariosCsv(run.summary, o);
         break;
+      case "kafka":
+        body = csv.kafkaCsv(run.summary, o);
+        break;
+      case "capacity": {
+        const report = csv.capacityReportFor(id);
+        body = report ? csv.capacityCsv(id, report, o) : null;
+        break;
+      }
       case "all":
         body = csv.fullReportCsv(id, o);
         break;

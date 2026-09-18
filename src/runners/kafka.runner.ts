@@ -1,8 +1,10 @@
 import { createRequire } from 'node:module';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Runner, RunnerContext, RunnerResult } from './types.ts';
-import type { KafkaConfig } from '../shared/types.ts';
+import type { KafkaConfig, KafkaVolumeSummary, ThresholdSpec } from '../shared/types.ts';
 import { startLagSampler } from '../kafka/monitor.ts';
+import { LagTracker, MessageLagTracker } from '../kafka/lagStats.ts';
+import { parseThreshold } from '../metrics/thresholds.ts';
 import { materializeScript, usesCustomScript } from './script.ts';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -69,8 +71,10 @@ export const kafkaRunner: Runner = {
   },
 
   async run(ctx: RunnerContext): Promise<RunnerResult> {
-    const cfg = ctx.config.kafka;
-    if (!cfg) throw new Error('kafka config missing');
+    if (!ctx.config.kafka) throw new Error('kafka config missing');
+    // Local copy: a generator's `options` may override the profile for this run only.
+    let cfg: KafkaConfig = { ...ctx.config.kafka };
+    let scriptThresholds: ThresholdSpec[] = [];
 
     const KafkaJS = loadKafkaJs();
     const kafka = new KafkaJS.Kafka({ kafkaJS: { logger: silentLogger } });
@@ -82,7 +86,19 @@ export const kafkaRunner: Runner = {
       const file = await materializeScript(ctx.config.script, scriptDir, 'generator.mjs');
       generator = await loadGenerator(file);
       ctx.log('warn', `custom generator ${file} runs in-process with full Node privileges`);
+      if (generator.options !== undefined) {
+        const applied = applyScriptOptions(cfg, generator.options, (m) => ctx.log('warn', m));
+        cfg = applied.cfg;
+        const own = new Set(ctx.config.thresholds.map((t) => t.expr.trim()));
+        scriptThresholds = applied.thresholds.filter((t) => !own.has(t.expr.trim()));
+        ctx.log('info', `script options: ${applied.summary || 'none recognised'}`);
+      }
     }
+    const maxBytes = (cfg.maxMb ?? 0) > 0 ? (cfg.maxMb ?? 0) * 1e6 : Number.POSITIVE_INFINITY;
+    const drainTimeoutSec = Math.max(0, cfg.drainTimeoutSec ?? 0);
+    // End-to-end mode consumes as its own group; unless another group was named,
+    // that group's lag is the one that means something.
+    const lagGroup = cfg.consumerGroup || (cfg.latencyMode === 'end-to-end' ? `ltd-${ctx.runId}` : '');
 
     const producerCount = Math.max(1, cfg.producers);
     const producers: KafkaProducer[] = [];
@@ -134,9 +150,29 @@ export const kafkaRunner: Runner = {
         : 'consumer did not join within 30s — latency will include rebalance time');
     }
 
-    const stopLag = cfg.monitorLag
-      ? startLagSampler(cfg, (lag) => ctx.agg.setLag(lag), (msg) => ctx.log('warn', msg))
+    const lag = new LagTracker(() => ctx.agg.startedAt);
+    const msgLag = cfg.monitorLag
+      ? new MessageLagTracker(cfg.topic, (ms) => ctx.agg.recordMessageLag(ms))
       : null;
+    const stopLag = cfg.monitorLag
+      ? startLagSampler(
+          { ...cfg, consumerGroup: lagGroup },
+          (total, groups) => {
+            ctx.agg.setLag(total);
+            const now = Date.now();
+            lag.record(now, groups);
+            msgLag?.observe(now, groups);
+            // Groups with nothing committed on the topic are noise in the live table.
+            ctx.lagSnapshot(groups.filter((g) => g.topics.length > 0));
+          },
+          (msg) => ctx.log('warn', msg),
+        )
+      : null;
+    if (cfg.monitorLag) {
+      ctx.log('info', lagGroup
+        ? `sampling consumer lag of group ${lagGroup} on ${cfg.topic}`
+        : `sampling consumer lag of every group committing on ${cfg.topic}`);
+    }
 
     // Reset the clock so the warm-up handshake is not billed to the run.
     ctx.agg.resetClock();
@@ -149,6 +185,11 @@ export const kafkaRunner: Runner = {
 
     let seq = 0;
     let delivered = 0;
+    let bytesSent = 0;
+    let bytesAcked = 0;
+    // Acked bytes per whole second of load, for the peak MB/s.
+    const bytesPerSec = new Map<number, number>();
+    let stoppedBy: KafkaVolumeSummary['stoppedBy'] = 'duration';
     let inflight = 0;
     let credit = 0;
     let lastTick = Date.now();
@@ -186,10 +227,19 @@ export const kafkaRunner: Runner = {
           headers: { 'ltd-sent-at': String(sentAt), 'ltd-seq': String(n) },
         };
       }
+      const size = byteSize(message.key) + byteSize(message.value);
+      bytesSent += size;
       inflight++;
       producer.send({ topic: cfg.topic, messages: [message] })
-        .then(() => {
+        .then((meta) => {
           delivered++;
+          bytesAcked += size;
+          if (msgLag) {
+            const md = Array.isArray(meta) ? (meta[0] as { partition?: number; baseOffset?: string | null; offset?: string }) : undefined;
+            msgLag.track(Number(md?.partition), Number(md?.baseOffset ?? md?.offset ?? NaN), sentAt);
+          }
+          const sec = Math.floor((Date.now() - ctx.agg.startedAt) / 1000);
+          bytesPerSec.set(sec, (bytesPerSec.get(sec) ?? 0) + size);
           // In end-to-end mode the consumer owns the success series entirely.
           // Recording the ack here too would double-count the message and pad
           // the histogram with zero-latency samples.
@@ -208,7 +258,11 @@ export const kafkaRunner: Runner = {
     await new Promise<void>((resolve) => {
       const timer = setInterval(() => {
         const now = Date.now();
-        if (ctx.signal.aborted || now >= deadline || seq >= maxMessages) {
+        if (ctx.signal.aborted || now >= deadline || seq >= maxMessages || bytesSent >= maxBytes) {
+          stoppedBy = ctx.signal.aborted ? 'stopped'
+            : seq >= maxMessages ? 'maxMessages'
+            : bytesSent >= maxBytes ? 'maxMb'
+            : 'duration';
           clearInterval(timer);
           resolve();
           return;
@@ -220,7 +274,7 @@ export const kafkaRunner: Runner = {
         credit = Math.min(credit, targetRate);
 
         let budget = Math.min(Math.floor(credit), perTick * 4);
-        while (budget > 0 && inflight < maxInflight && seq < maxMessages) {
+        while (budget > 0 && inflight < maxInflight && seq < maxMessages && bytesSent < maxBytes) {
           dispatch(producers[seq % producerCount], seq % producerCount);
           credit--;
           budget--;
@@ -237,6 +291,30 @@ export const kafkaRunner: Runner = {
       await new Promise((r) => setTimeout(r, 100));
     }
 
+    const loadEndedAt = Date.now();
+    lag.markLoadEnd(loadEndedAt);
+    const loadDurationMs = loadEndedAt - ctx.agg.startedAt;
+
+    // Volume test tail: production is over, but the test is not until the
+    // consumers have worked through the backlog it left behind.
+    let drained = false;
+    if (drainTimeoutSec > 0 && !ctx.signal.aborted) {
+      if (!stopLag) {
+        ctx.log('warn', 'drain wait needs consumer-lag sampling — skipped');
+      } else {
+        ctx.log('info', `production done — waiting up to ${drainTimeoutSec}s for consumer lag to reach 0`);
+        const until = loadEndedAt + drainTimeoutSec * 1000;
+        while (!ctx.signal.aborted && Date.now() < until && !lag.caughtUp) {
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        drained = lag.caughtUp;
+        if (!lag.sampledSinceLoadEnd) ctx.log('warn', 'no lag sample arrived during the drain wait');
+        else ctx.log(drained ? 'info' : 'warn', drained
+          ? `consumers caught up ${Math.round((Date.now() - loadEndedAt) / 100) / 10}s after production stopped`
+          : `consumers still behind after ${drainTimeoutSec}s drain wait`);
+      }
+    }
+
     if (generatorFailures > 0) ctx.log('warn', `generator threw on ${generatorFailures} message(s)`);
     if (scriptDir) await rm(scriptDir, { recursive: true, force: true });
     stopLag?.();
@@ -247,15 +325,138 @@ export const kafkaRunner: Runner = {
       await consumer.disconnect().catch(() => {});
     }
 
+    const loadSec = loadDurationMs / 1000;
+    const volume: KafkaVolumeSummary = {
+      messagesSent: seq,
+      messagesAcked: delivered,
+      bytesAcked,
+      avgMessageBytes: delivered ? Math.round(bytesAcked / delivered) : 0,
+      mbPerSecAvg: loadSec > 0 ? round2(bytesAcked / 1e6 / loadSec) : 0,
+      mbPerSecPeak: round2([...bytesPerSec.values()].reduce((m, b) => Math.max(m, b), 0) / 1e6),
+      loadDurationMs,
+      stoppedBy,
+    };
+    const lagSummary = lag.summary(drainTimeoutSec);
+    const messageLag = msgLag?.summary();
+    if (msgLag && msgLag.untracked > 0) {
+      ctx.log('warn', `${msgLag.untracked} message(s) not tracked for per-message lag`
+        + (cfg.acks === '0' ? ' — acks=0 returns no offset' : ''));
+    }
+    for (const m of messageLag ?? []) {
+      ctx.log('info', `message lag ${m.group}: ${m.consumed} consumed, ${m.pending} pending, `
+        + `min ${m.min}ms avg ${m.avg}ms p50 ${m.p50}ms p95 ${m.p95}ms p99 ${m.p99}ms max ${m.max}ms`);
+    }
+    if (cfg.monitorLag && !lagSummary) {
+      ctx.log('warn', `no consumer group committed offsets on ${cfg.topic} — lag summary is empty`);
+    }
+
     ctx.log('info', `produced ${seq} message(s), ${delivered} acked, target rate ${targetRate}/s`);
+    ctx.log('info', `volume: ${round2(bytesAcked / 1e6)} MB acked, ${volume.mbPerSecAvg} MB/s avg, ${volume.mbPerSecPeak} MB/s peak, stopped by ${stoppedBy}`);
+    if (lagSummary) {
+      ctx.log('info', `consumer lag: start ${lagSummary.start}, max ${lagSummary.max} @${lagSummary.maxAtSec}s, `
+        + `end of load ${lagSummary.endOfLoad}, final ${lagSummary.final}, growth ${lagSummary.growthPerSec}/s`);
+    }
     if (cfg.latencyMode === 'end-to-end') {
       // Totals come from the consumer here, so a tail still in flight at the
       // deadline shows up as a gap. Say so rather than letting it look like loss.
       ctx.log('info', `end-to-end totals count consumed messages: ${ctx.agg.totalRequests} of ${delivered} acked`);
     }
-    return {};
+    return {
+      kafka: {
+        volume,
+        lag: lagSummary,
+        ...(messageLag ? { messageLag, messageLagUntracked: msgLag?.untracked ?? 0 } : {}),
+      },
+      extraThresholds: scriptThresholds,
+      // Acks stop arriving once production ends, so in produce-ack mode the
+      // drain wait would only dilute the average rate. End-to-end keeps the
+      // whole run: the consumer is still receiving during the drain.
+      ...(drainTimeoutSec > 0 && cfg.latencyMode === 'produce-ack' ? { loadDurationMs } : {}),
+    };
   },
 };
+
+/** Settings a generator may declare in `export const options`, so a script carries its own run conditions. */
+const OPTION_BOUNDS = {
+  targetRate: [1, 1_000_000],
+  durationSec: [1, 86_400],
+  maxMessages: [0, Number.MAX_SAFE_INTEGER],
+  maxMb: [0, 10_000_000],
+  producers: [1, 64],
+  drainTimeoutSec: [0, 86_400],
+} as const satisfies Partial<Record<keyof KafkaConfig, readonly [number, number]>>;
+
+/**
+ * Overlay a generator's `options` onto the profile's config. Anything unknown
+ * or out of range is reported and ignored — never guessed at.
+ */
+export function applyScriptOptions(
+  base: KafkaConfig,
+  raw: unknown,
+  warn: (msg: string) => void,
+): { cfg: KafkaConfig; thresholds: ThresholdSpec[]; summary: string } {
+  const cfg: KafkaConfig = { ...base };
+  const thresholds: ThresholdSpec[] = [];
+  const applied: string[] = [];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    warn('script `options` is not an object — ignored');
+    return { cfg, thresholds, summary: '' };
+  }
+
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key in OPTION_BOUNDS) {
+      const [lo, hi] = OPTION_BOUNDS[key as keyof typeof OPTION_BOUNDS];
+      const n = typeof value === 'number' ? value : NaN;
+      if (!Number.isFinite(n) || n < lo || n > hi) {
+        warn(`script option ${key}=${String(value)} is not a number in ${lo}..${hi} — ignored`);
+        continue;
+      }
+      // maxMb may be fractional; everything else counts whole units.
+      (cfg as unknown as Record<string, number>)[key] = key === 'maxMb' ? n : Math.round(n);
+      applied.push(`${key}=${n}`);
+    } else if (key === 'topic' || key === 'consumerGroup') {
+      if (typeof value !== 'string' || (key === 'topic' && !value.trim())) {
+        warn(`script option ${key} must be a string — ignored`);
+        continue;
+      }
+      cfg[key] = value.trim();
+      applied.push(`${key}=${value.trim()}`);
+    } else if (key === 'monitorLag') {
+      if (typeof value !== 'boolean') { warn('script option monitorLag must be true or false — ignored'); continue; }
+      cfg.monitorLag = value;
+      applied.push(`monitorLag=${value}`);
+    } else if (key === 'latencyMode') {
+      if (value !== 'produce-ack' && value !== 'end-to-end') {
+        warn('script option latencyMode must be "produce-ack" or "end-to-end" — ignored');
+        continue;
+      }
+      cfg.latencyMode = value;
+      applied.push(`latencyMode=${value}`);
+    } else if (key === 'thresholds') {
+      if (!Array.isArray(value)) { warn('script option thresholds must be an array of strings — ignored'); continue; }
+      for (const e of value) {
+        if (typeof e === 'string' && parseThreshold(e)) thresholds.push({ expr: e.trim() });
+        else warn(`script threshold ${JSON.stringify(e)} is not valid DSL — ignored`);
+      }
+      if (thresholds.length) applied.push(`${thresholds.length} threshold(s)`);
+    } else {
+      warn(`script option ${key} is not recognised — ignored`);
+    }
+  }
+  // A drain wait is meaningless without lag samples to watch.
+  if ((cfg.drainTimeoutSec ?? 0) > 0 && !cfg.monitorLag) {
+    warn('drainTimeoutSec set but monitorLag is off — enabling lag sampling');
+    cfg.monitorLag = true;
+  }
+  return { cfg, thresholds, summary: applied.join(', ') };
+}
+
+function byteSize(v: string | Buffer | null): number {
+  if (v == null) return 0;
+  return typeof v === 'string' ? Buffer.byteLength(v) : v.length;
+}
+
+function round2(n: number): number { return Math.round(n * 100) / 100; }
 
 function producerConfig(cfg: KafkaConfig): Record<string, unknown> {
   return {
@@ -279,6 +480,8 @@ function buildKey(cfg: KafkaConfig, seq: number): string | null {
 /** Shape a custom generator module must export. */
 interface GeneratorModule {
   setup?: () => void | Promise<void>;
+  /** Run conditions carried by the script itself — see `applyScriptOptions`. */
+  options?: unknown;
   generate: (ctx: { seq: number; ts: number; producer: number }) =>
     { value: unknown; key?: string | null; headers?: Record<string, string> };
 }

@@ -74,9 +74,16 @@ export async function collectGroups(
   admin: KafkaAdmin,
   monitoredTopics: string[],
   latestMap: Map<string, Map<number, number>>,
+  /**
+   * Read only these groups. Listing, describing and fetching offsets for every
+   * group on a shared cluster (Confluent Cloud) takes seconds per round; a run
+   * that names its group must not pay for all the others.
+   */
+  onlyIds?: string[],
 ): Promise<GroupInfo[]> {
-  const { groups: allGroups } = await admin.listGroups();
-  const ids = allGroups.filter((g) => g.protocolType === 'consumer').map((g) => g.groupId).sort();
+  const ids = onlyIds?.length
+    ? [...onlyIds].sort()
+    : (await admin.listGroups()).groups.filter((g) => g.protocolType === 'consumer').map((g) => g.groupId).sort();
   if (ids.length === 0) return [];
 
   const { groups: descriptions } = await admin.describeGroups(ids);
@@ -267,7 +274,7 @@ function emptyPayload(bootstrapServers: string, intervalSec: number, errors: str
  */
 export function startLagSampler(
   cfg: KafkaConfig,
-  onLag: (lag: number) => void,
+  onLag: (lag: number, groups: GroupInfo[]) => void,
   onWarn: (msg: string) => void,
 ): () => void {
   let stopped = false;
@@ -281,19 +288,27 @@ export function startLagSampler(
       onWarn(`lag sampler disabled: ${(err as Error).message}`);
       return;
     }
+    let slowWarned = false;
     while (!stopped) {
+      const began = Date.now();
       try {
         const offsets = await admin.fetchTopicOffsets(cfg.topic);
         const latestMap = new Map([[cfg.topic, new Map(offsets.map((o) => [o.partition, Number.parseInt(o.high, 10)]))]]);
-        const groups = await collectGroups(admin, [cfg.topic], latestMap);
-        const wanted = cfg.consumerGroup
-          ? groups.filter((g) => g.groupId === cfg.consumerGroup)
-          : groups;
-        onLag(wanted.reduce((s, g) => s + g.totalLag, 0));
+        const groups = await collectGroups(
+          admin, [cfg.topic], latestMap, cfg.consumerGroup ? [cfg.consumerGroup] : undefined,
+        );
+        onLag(groups.reduce((s, g) => s + g.totalLag, 0), groups);
       } catch (err) {
         onWarn(`lag sample failed: ${(err as Error).message}`);
       }
-      await sleep(1000, () => stopped);
+      const took = Date.now() - began;
+      if (took > 3000 && !slowWarned) {
+        slowWarned = true;
+        onWarn(`lag sample took ${(took / 1000).toFixed(1)}s — lag is sampled that coarsely`
+          + (cfg.consumerGroup ? '' : '; name the consumer group to query only it'));
+      }
+      // Aim for one sample a second, not one second between slow samples.
+      await sleep(Math.max(0, 1000 - took), () => stopped);
     }
     await admin.disconnect().catch(() => {});
   })();

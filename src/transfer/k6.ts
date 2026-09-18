@@ -1,12 +1,12 @@
 import { parse } from 'acorn';
 import type * as ESTree from 'acorn';
-import { DEFAULT_REST } from '../shared/defaults.ts';
+import { DEFAULT_REST, restSteps } from '../shared/defaults.ts';
 import { parseThreshold, toK6Thresholds } from '../metrics/thresholds.ts';
 import {
   asArray, asBool, asNumber, asRecord, asString, propertyName, staticValue, toSeconds,
   UNRESOLVED, type Static, type StaticOpts,
 } from './literal.ts';
-import type { CheckSpec, RestConfig, RunConfig, ThresholdSpec } from '../shared/types.ts';
+import type { CheckSpec, RestConfig, RestStep, RunConfig, ThresholdSpec } from '../shared/types.ts';
 
 /**
  * k6 script ⇄ UI configuration.
@@ -28,6 +28,7 @@ const K6_DEFAULT_TIMEOUT_SEC = 60;
 
 export function toK6Script(config: RunConfig): string {
   const cfg = config.rest ?? DEFAULT_REST;
+  const steps = restSteps(cfg);
   const { thresholds, unmapped } = toK6Thresholds(config.thresholds);
 
   const options: Record<string, unknown> = {};
@@ -65,6 +66,10 @@ export function toK6Script(config: RunConfig): string {
     headers: cfg.headers,
     auth: cfg.auth,
     thinkTimeMs: cfg.thinkTimeMs,
+    // A multi-step iteration reads back from here rather than from the script
+    // body: the loop resolves its target from `step.url`, which no static
+    // reader can follow to a URL.
+    ...(steps.length > 1 ? { steps } : {}),
     checks: config.checks,
     thresholds: config.thresholds.map((x) => x.expr),
   };
@@ -88,23 +93,53 @@ export function toK6Script(config: RunConfig): string {
   lines.push('');
   lines.push(HELPERS);
   lines.push('');
-  lines.push(`const url = ${str(cfg.url)};`);
-  lines.push(`const params = {`);
-  lines.push(`  headers: ${json(headers, 1)},`);
-  lines.push(`  timeout: ${str(`${cfg.timeoutSec}s`)},`);
-  lines.push(`  redirects: ${cfg.followRedirects ? 10 : 0},`);
-  lines.push('};');
-  lines.push(`const body = ${cfg.bodyType === 'none' || !cfg.body ? 'null' : str(cfg.body)};`);
-  lines.push('');
-  lines.push('export default function () {');
-  lines.push(`  const res = http.request(${str(cfg.method)}, url, body, params);`);
-  if (config.checks.length) {
-    lines.push('  check(res, {');
-    for (const c of config.checks) lines.push(`    ${str(c.name)}: (r) => ${checkExpr(c)},`);
-    lines.push('  });');
+  if (steps.length > 1) {
+    lines.push(`const steps = ${json(steps.map((step) => ({
+      name: step.name,
+      method: step.method,
+      url: step.url,
+      body: step.bodyType === 'none' || !step.body ? null : step.body,
+      thinkMs: step.thinkTimeMs,
+      params: {
+        headers: stepHeaders(cfg, step),
+        timeout: `${cfg.timeoutSec}s`,
+        redirects: cfg.followRedirects ? 10 : 0,
+        // Overrides k6's own scenario tag, which cannot tell one step of an
+        // iteration from another — this is what the dashboard groups on.
+        tags: { scenario: step.name },
+      },
+    })), 0)};`);
+    lines.push('');
+    lines.push('export default function () {');
+    lines.push('  for (const step of steps) {');
+    lines.push('    const res = http.request(step.method, step.url, step.body, step.params);');
+    if (config.checks.length) {
+      lines.push('    check(res, {');
+      for (const c of config.checks) lines.push(`      ${str(c.name)}: (r) => ${checkExpr(c)},`);
+      lines.push('    }, { scenario: step.name });');
+    }
+    lines.push('    if (step.thinkMs > 0) sleep(step.thinkMs / 1000);');
+    lines.push('  }');
+    lines.push('}');
+  } else {
+    lines.push(`const url = ${str(cfg.url)};`);
+    lines.push(`const params = {`);
+    lines.push(`  headers: ${json(headers, 1)},`);
+    lines.push(`  timeout: ${str(`${cfg.timeoutSec}s`)},`);
+    lines.push(`  redirects: ${cfg.followRedirects ? 10 : 0},`);
+    lines.push('};');
+    lines.push(`const body = ${cfg.bodyType === 'none' || !cfg.body ? 'null' : str(cfg.body)};`);
+    lines.push('');
+    lines.push('export default function () {');
+    lines.push(`  const res = http.request(${str(cfg.method)}, url, body, params);`);
+    if (config.checks.length) {
+      lines.push('  check(res, {');
+      for (const c of config.checks) lines.push(`    ${str(c.name)}: (r) => ${checkExpr(c)},`);
+      lines.push('  });');
+    }
+    if (cfg.thinkTimeMs > 0) lines.push(`  sleep(${cfg.thinkTimeMs / 1000});`);
+    lines.push('}');
   }
-  if (cfg.thinkTimeMs > 0) lines.push(`  sleep(${cfg.thinkTimeMs / 1000});`);
-  lines.push('}');
   lines.push('');
   lines.push('export function handleSummary(data) {');
   lines.push('  const out = {};');
@@ -139,6 +174,20 @@ function jsonPath(obj, path) {
   return cur;
 }`;
 
+/**
+ * A step's headers as the exported script sends them: the profile's shared set,
+ * the step's own merged over it, and a Content-Type only when the step sends a
+ * body and neither level named one.
+ */
+function stepHeaders(cfg: RestConfig, step: RestStep): Record<string, string> {
+  const out: Record<string, string> = { ...cfg.headers, ...step.headers };
+  if (!hasHeader(out, 'content-type')) {
+    if (step.bodyType === 'json') out['Content-Type'] = 'application/json';
+    if (step.bodyType === 'form') out['Content-Type'] = 'application/x-www-form-urlencoded';
+  }
+  return out;
+}
+
 function checkExpr(c: CheckSpec): string {
   switch (c.kind) {
     case 'status': return `matchStatus(r.status, ${str(c.value)})`;
@@ -168,6 +217,7 @@ export function fromK6Script(source: string): ImportResult {
   const rest: RestConfig = structuredClone(DEFAULT_REST);
   let checks: CheckSpec[] = [];
   let thresholds: ThresholdSpec[] = [];
+  let metaSteps: RestStep[] = [];
 
   const exported = collectExportedObjects(ast);
 
@@ -192,6 +242,7 @@ export function fromK6Script(source: string): ImportResult {
     }
     const think = asNumber(meta.thinkTimeMs);
     if (think !== null) rest.thinkTimeMs = think;
+    metaSteps = readMetaSteps(asArray(meta.steps));
     const metaHeaders = stringRecord(asRecord(meta.headers));
     if (metaHeaders) rest.headers = metaHeaders;
     checks = readMetaChecks(asArray(meta.checks));
@@ -210,7 +261,8 @@ export function fromK6Script(source: string): ImportResult {
   }
 
   // 3. The request itself.
-  const req = findHttpCall(ast, source);
+  const calls = findHttpCalls(ast, source);
+  const req = calls[0] ?? null;
   if (req) {
     if (req.method) rest.method = req.method;
     if (req.url) rest.url = req.url;
@@ -232,6 +284,20 @@ export function fromK6Script(source: string): ImportResult {
     warnings.push('no http.request / http.get / http.post call found — target URL left at default');
   }
 
+  // 3b. Steps. Metadata is authoritative — an exported loop resolves its target
+  // from `step.url`, which no static reader can follow — and a foreign script is
+  // read one step per http call.
+  const steps = metaSteps.length ? metaSteps : stepsFromCalls(calls, rest, warnings);
+  if (steps.length > 1) {
+    rest.steps = steps;
+    const first = steps[0];
+    rest.url = first.url;
+    rest.method = first.method;
+    rest.body = first.body;
+    rest.bodyType = first.bodyType;
+    rest.thinkTimeMs = first.thinkTimeMs;
+  }
+
   // 4. sleep() as think time, when metadata did not already supply it.
   if (!meta) {
     const slept = findSleepSeconds(ast);
@@ -249,6 +315,62 @@ export function fromK6Script(source: string): ImportResult {
     config: { protocol: 'rest', rest, checks, thresholds, script: { mode: 'builtin', content: '', path: '', filename: '', env: {} } },
     warnings,
   };
+}
+
+function readMetaSteps(arr: Static[] | null): RestStep[] {
+  if (!arr) return [];
+  const out: RestStep[] = [];
+  for (const item of arr) {
+    const r = asRecord(item);
+    if (!r) continue;
+    const url = asString(r.url);
+    const method = asString(r.method)?.toUpperCase();
+    if (!url || !(METHODS as readonly string[]).includes(method ?? '')) continue;
+    const bodyType = asString(r.bodyType) ?? '';
+    out.push({
+      name: asString(r.name) || `step ${out.length + 1}`,
+      method: method as RestConfig['method'],
+      url,
+      headers: stringRecord(asRecord(r.headers)) ?? {},
+      body: asString(r.body) ?? '',
+      bodyType: (['none', 'json', 'raw', 'form'].includes(bodyType)
+        ? bodyType
+        : 'none') as RestStep['bodyType'],
+      thinkTimeMs: asNumber(r.thinkTimeMs) ?? 0,
+    });
+  }
+  return out;
+}
+
+/**
+ * One step per http call, for a script this exporter did not write. A call
+ * whose URL could not be resolved statically is dropped rather than imported as
+ * a step pointing at the form's default target.
+ */
+function stepsFromCalls(
+  calls: HttpCall[],
+  rest: RestConfig,
+  warnings: string[],
+): RestStep[] {
+  if (calls.length < 2) return [];
+  const out: RestStep[] = [];
+  for (const call of calls) {
+    if (!call.url || !call.method) {
+      warnings.push('a request could not be resolved statically — dropped from the steps');
+      continue;
+    }
+    const body = call.body ?? '';
+    out.push({
+      name: call.name || `step ${out.length + 1}`,
+      method: call.method,
+      url: call.url,
+      headers: call.headers ?? {},
+      body,
+      bodyType: body ? (looksJson(body) ? 'json' : 'raw') : 'none',
+      thinkTimeMs: rest.thinkTimeMs,
+    });
+  }
+  return out;
 }
 
 function readMetaChecks(arr: Static[] | null): CheckSpec[] {
@@ -407,21 +529,26 @@ interface HttpCall {
   headers: Record<string, string> | null;
   timeoutSec: number | null;
   redirects: number | null;
+  /** `params.tags.scenario`, when the call carries one. */
+  name: string | null;
   unresolved: string[];
 }
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const;
 
 /**
- * Find the first `http.*` call and resolve its arguments, following top-level
+ * Find every `http.*` call and resolve its arguments, following top-level
  * `const` bindings so the exported shape (url / params / body in consts) reads back.
+ *
+ * Order matters: the first call is the profile's single request, and a script
+ * that issues several per iteration reads back as one step each.
  */
-function findHttpCall(ast: ESTree.Program, source: string): HttpCall | null {
+function findHttpCalls(ast: ESTree.Program, source: string): HttpCall[] {
   const consts = topLevelConsts(ast);
-  let found: HttpCall | null = null;
+  const found: HttpCall[] = [];
 
   walk(ast, (node) => {
-    if (found || node.type !== 'CallExpression') return;
+    if (node.type !== 'CallExpression') return;
     const call = node as ESTree.CallExpression;
     if (call.callee.type !== 'MemberExpression') return;
     const callee = call.callee;
@@ -468,8 +595,12 @@ function findHttpCall(ast: ESTree.Program, source: string): HttpCall | null {
     const headers = params ? stringRecord(asRecord(params.headers)) : null;
     const timeoutSec = params ? toSeconds(params.timeout) : null;
     const redirects = params ? asNumber(params.redirects) : null;
+    // A script that tags its requests names its own steps; the tag is also what
+    // the dashboard would have grouped the run by.
+    const tags = params ? asRecord(params.tags) : null;
+    const name = tags ? asString(tags.scenario) : null;
 
-    found = { method, url, body, headers, timeoutSec, redirects, unresolved };
+    found.push({ method, url, body, headers, timeoutSec, redirects, name, unresolved });
   });
 
   void source;

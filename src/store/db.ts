@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DATA_DIR } from "../config.ts";
 import type {
   AppSettings,
+  MessageLagWindow,
   Profile,
   Protocol,
   RunConfig,
@@ -79,6 +80,16 @@ CREATE TABLE IF NOT EXISTS secrets (
   updated_at INTEGER NOT NULL
 );
 `);
+
+// Columns added after the first release. CREATE TABLE IF NOT EXISTS never
+// touches an existing table, so an older database gets them here.
+{
+  const cols = new Set(
+    (db.prepare("PRAGMA table_info(run_samples)").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  // Per-message Kafka lag of the bucket, as JSON (MessageLagWindow).
+  if (!cols.has("msg_lag")) db.exec("ALTER TABLE run_samples ADD COLUMN msg_lag TEXT");
+}
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -260,8 +271,8 @@ export function insertSample(runId: string, w: WindowMetrics): void {
   db.prepare(
     `
     INSERT INTO run_samples(run_id,ts,elapsed,requests,success,failed,rps,tps,vus,
-      lat_min,lat_avg,lat_p90,lat_p95,lat_p99,lat_max,consumer_lag)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      lat_min,lat_avg,lat_p90,lat_p95,lat_p99,lat_max,consumer_lag,msg_lag)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `,
   ).run(
     runId,
@@ -280,6 +291,7 @@ export function insertSample(runId: string, w: WindowMetrics): void {
     w.latency.p99,
     w.latency.max,
     w.consumerLag ?? null,
+    w.messageLag ? JSON.stringify(w.messageLag) : null,
   );
 }
 
@@ -322,7 +334,7 @@ export function getRun(
 export function getSamples(runId: string): WindowMetrics[] {
   const rows = db
     .prepare("SELECT * FROM run_samples WHERE run_id=? ORDER BY ts")
-    .all(runId) as unknown as Array<Record<string, number | null>>;
+    .all(runId) as unknown as Array<Record<string, number | string | null>>;
   return rows.map((r) => ({
     ts: r.ts as number,
     elapsed: r.elapsed as number,
@@ -342,7 +354,16 @@ export function getSamples(runId: string): WindowMetrics[] {
     },
     consumerLag:
       r.consumer_lag == null ? undefined : (r.consumer_lag as number),
+    ...(typeof r.msg_lag === "string" ? { messageLag: parseMessageLag(r.msg_lag) } : {}),
   }));
+}
+
+function parseMessageLag(raw: string): MessageLagWindow | undefined {
+  try {
+    return JSON.parse(raw) as MessageLagWindow;
+  } catch {
+    return undefined;
+  }
 }
 
 export function getLogs(
@@ -385,13 +406,18 @@ export function redactConfig(c: RunConfig): RunConfig {
     if (clone.rest.auth.password) clone.rest.auth.password = "***";
     if (clone.rest.auth.token) clone.rest.auth.token = "***";
   }
-  for (const cfg of [clone.rest, clone.socket] as Array<
-    { headers?: Record<string, string> } | undefined
-  >) {
-    if (!cfg?.headers) continue;
-    for (const k of Object.keys(cfg.headers)) {
+  // A REST step carries headers of its own, and that is exactly where a
+  // per-API key ends up — redact those alongside the shared ones.
+  const headerSets: Array<Record<string, string> | undefined> = [
+    clone.rest?.headers,
+    clone.socket?.headers,
+    ...(clone.rest?.steps ?? []).map((step) => step.headers),
+  ];
+  for (const headers of headerSets) {
+    if (!headers) continue;
+    for (const k of Object.keys(headers)) {
       if (/authorization|api[-_]?key|token|secret|cookie/i.test(k))
-        cfg.headers[k] = "***";
+        headers[k] = "***";
     }
   }
   if (clone.kafka?.librdkafka) {
@@ -435,6 +461,8 @@ function pruneInactive(c: RunConfig): RunConfig {
     if (kafka.keyStrategy !== "fixed") delete kafka.keyValue;
     if (kafka.latencyMode !== "end-to-end" && !kafka.monitorLag)
       delete kafka.consumerGroup;
+    if (!kafka.maxMb) delete kafka.maxMb;
+    if (!kafka.monitorLag || !kafka.drainTimeoutSec) delete kafka.drainTimeoutSec;
   }
 
   return c;

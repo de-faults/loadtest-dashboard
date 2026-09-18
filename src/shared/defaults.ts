@@ -1,8 +1,17 @@
 import type {
-  KafkaConfig, Protocol, RestConfig, RunConfig, SocketConfig, SocketScenario,
+  KafkaConfig, Protocol, RestConfig, RestStep, RunConfig, SocketConfig, SocketScenario,
 } from './types.ts';
 
 export const DEFAULT_REST: RestConfig = {
+  steps: [{
+    name: 'request',
+    method: 'GET',
+    url: 'https://httpbin.org/get',
+    headers: {},
+    body: '',
+    bodyType: 'none',
+    thinkTimeMs: 0,
+  }],
   url: 'https://httpbin.org/get',
   method: 'GET',
   headers: { Accept: 'application/json' },
@@ -61,6 +70,45 @@ export function socketScenarios(cfg: SocketConfig): SocketScenario[] {
   return [{ name: 'socket', flow: [] }];
 }
 
+/**
+ * The steps of a REST config, migrating the single request that profiles saved
+ * before steps existed still carry. Always returns at least one, so callers
+ * never have to handle a config with nothing to send.
+ */
+export function restSteps(cfg: RestConfig): RestStep[] {
+  if (cfg.steps?.length) return cfg.steps;
+  return [{
+    name: 'request',
+    method: cfg.method,
+    url: cfg.url,
+    headers: {},
+    body: cfg.body,
+    bodyType: cfg.bodyType,
+    thinkTimeMs: cfg.thinkTimeMs,
+  }];
+}
+
+/**
+ * Keep the single-request fields pointing at step 1.
+ *
+ * Two places holding the same truth is how a form starts lying: the older
+ * shape stays readable by anything that has not learned about steps, but it is
+ * only ever written from here, never edited on its own.
+ */
+export function withRestSteps(cfg: RestConfig, steps: RestStep[]): RestConfig {
+  const first = steps[0];
+  if (!first) return { ...cfg, steps };
+  return {
+    ...cfg,
+    steps,
+    url: first.url,
+    method: first.method,
+    body: first.body,
+    bodyType: first.bodyType,
+    thinkTimeMs: first.thinkTimeMs,
+  };
+}
+
 export const DEFAULT_KAFKA: KafkaConfig = {
   bootstrapServers: 'localhost:9092',
   topic: 'loadtest',
@@ -76,9 +124,11 @@ export const DEFAULT_KAFKA: KafkaConfig = {
   targetRate: 1000,
   durationSec: 60,
   maxMessages: 0,
+  maxMb: 0,
   latencyMode: 'produce-ack',
   consumerGroup: '',
   monitorLag: true,
+  drainTimeoutSec: 0,
 };
 
 export function defaultConfig(protocol: Protocol): RunConfig {

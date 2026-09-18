@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
-  CheckSpec, KafkaConfig, Profile, Protocol, RestConfig, RunConfig, SocketConfig,
+  CheckSpec, KafkaConfig, Profile, Protocol, RestConfig, RestStep, RunConfig, SocketConfig,
   SocketFlowStep, SocketScenario, Stage,
 } from '@shared/types.ts';
-import { socketScenarios } from '@shared/defaults.ts';
+import { restSteps, socketScenarios, withRestSteps } from '@shared/defaults.ts';
+import { rampLevels, rampStages, stagesDurationSec, type RampPlan } from '@shared/capacity.ts';
 import { api, type SocketProbe } from '../lib/api.ts';
 import { Empty, Panel } from '../components/Panel.tsx';
 import { Badge } from '../components/Stat.tsx';
@@ -213,6 +214,59 @@ export function ConfigView(props: {
 
 // ─── REST ────────────────────────────────────────────────────────────────────
 
+// Opens on a single user: one VU proves the journey works before the ramp
+// spends half an hour finding a capacity number for a broken request.
+const DEFAULT_RAMP: RampPlan = {
+  startVus: 1, stepVus: 10, maxVus: 100, rampSec: 10, holdSec: 300, coolDownSec: 10,
+};
+
+/**
+ * Stage generator for a capacity test: climb in equal steps, hold each level
+ * long enough to measure it. Typing seventeen stages by hand for an eight-level
+ * ramp is where these tests usually go wrong.
+ *
+ * The plan lives with the form, not the profile — the stages it writes are the
+ * saved artefact, so a generated ramp can still be adjusted stage by stage.
+ */
+function RampBuilder({ onGenerate }: { onGenerate: (stages: Stage[]) => void }) {
+  const { t } = useTranslation();
+  const [plan, setPlan] = useState<RampPlan>(DEFAULT_RAMP);
+  const set = <K extends keyof RampPlan>(k: K, v: RampPlan[K]): void => setPlan({ ...plan, [k]: v });
+
+  const preview = rampStages(plan);
+  const levels = rampLevels(plan).length;
+  const totalMin = Math.round((stagesDurationSec(preview) / 60) * 10) / 10;
+
+  return (
+    <div className="ramp-builder">
+      <span className="field-label">{t('config.rampBuilder')}</span>
+      <div className="field-row">
+        <NumberField label={t('config.rampStart')} value={plan.startVus} min={1}
+          hint={t('config.rampStartHint')} onChange={(v) => set('startVus', v)} />
+        <NumberField label={t('config.rampStep')} value={plan.stepVus} min={1}
+          onChange={(v) => set('stepVus', v)} />
+        <NumberField label={t('config.rampMax')} value={plan.maxVus} min={1}
+          onChange={(v) => set('maxVus', v)} />
+        <NumberField label={t('config.rampUp')} value={plan.rampSec} min={0}
+          onChange={(v) => set('rampSec', v)} />
+        <NumberField label={t('config.rampHold')} value={plan.holdSec} min={1}
+          onChange={(v) => set('holdSec', v)} />
+        <NumberField label={t('config.rampCoolDown')} value={plan.coolDownSec} min={0}
+          onChange={(v) => set('coolDownSec', v)} />
+      </div>
+      <div className="ramp-actions">
+        <button className="btn btn-sm" onClick={() => onGenerate(preview)}>
+          ⟳ {t('config.rampGenerate')}
+        </button>
+        <span className="field-hint">
+          {t('config.rampPreview', { levels, stages: preview.length, minutes: totalMin })}
+        </span>
+      </div>
+      <div className="field-hint">{t('config.rampHint')}</div>
+    </div>
+  );
+}
+
 function RestForm({ value, headerHints, headerValueHints, onChange }: {
   value: RestConfig;
   headerHints: string[];
@@ -222,15 +276,73 @@ function RestForm({ value, headerHints, headerValueHints, onChange }: {
   const { t } = useTranslation();
   const set = <K extends keyof RestConfig>(k: K, v: RestConfig[K]): void => onChange({ ...value, [k]: v });
 
+  const steps = restSteps(value);
+  // Writing steps also rewrites the single-request fields from step 1, so the
+  // form never leaves a second, stale copy of the first request behind.
+  const setSteps = (next: RestStep[]): void => onChange(withRestSteps(value, next));
+
   return (
     <>
-      <div className="section-title">{t('config.request')}</div>
-      <div className="field-row">
-        <SelectField label={t('config.method')} value={value.method}
-          options={(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const).map((m) => ({ value: m, label: m }))}
-          onChange={(v) => set('method', v)} />
-        <TextField label={t('config.url')} value={value.url} onChange={(v) => set('url', v)} />
-      </div>
+      <div className="section-title">{t('config.requests')}</div>
+      <div className="field-hint" style={{ marginBottom: 8 }}>{t('config.requestsHint')}</div>
+      {steps.map((step, i) => {
+        const patch = (next: Partial<RestStep>): void => {
+          setSteps(steps.map((x, j) => (j === i ? { ...x, ...next } : x)));
+        };
+        return (
+          <div key={i} className="scenario-item">
+            <div className="step-head">
+              <span className="step-index">{i + 1}</span>
+              <input
+                className="step-event"
+                value={step.name}
+                placeholder={t('config.stepName')}
+                onChange={(e) => patch({ name: e.target.value })}
+                onBlur={(e) => { if (e.target.value !== e.target.value.trim()) patch({ name: e.target.value.trim() }); }}
+              />
+              <span className="spacer" />
+              <button className="btn btn-sm" title={t('common.remove')} disabled={steps.length === 1}
+                onClick={() => setSteps(steps.filter((_, j) => j !== i))}>✕</button>
+            </div>
+            <div className="field-row">
+              <SelectField label={t('config.method')} value={step.method}
+                options={(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const).map((m) => ({ value: m, label: m }))}
+                onChange={(v) => patch({ method: v })} />
+              <TextField label={t('config.url')} value={step.url} onChange={(v) => patch({ url: v })} />
+            </div>
+            <KeyValueEditor
+              label={t('config.stepHeaders')} value={step.headers} onChange={(v) => patch({ headers: v })}
+              suggestions={headerHints} valueSuggestions={headerValueHints}
+              addLabel={t('common.add')} removeLabel={t('common.remove')}
+              keyLabel={t('common.key')} valueLabel={t('common.value')}
+            />
+            <div className="field-row">
+              <SelectField label={t('config.bodyType')} value={step.bodyType}
+                options={(['none', 'json', 'raw', 'form'] as const).map((b) => ({ value: b, label: b }))}
+                onChange={(v) => patch({ bodyType: v })} />
+              <NumberField label={t('config.thinkTime')} value={step.thinkTimeMs} min={0}
+                onChange={(v) => patch({ thinkTimeMs: v })} />
+            </div>
+            {step.bodyType !== 'none' ? (
+              <TextAreaField label={t('config.body')} value={step.body} onChange={(v) => patch({ body: v })} />
+            ) : null}
+          </div>
+        );
+      })}
+      <button
+        className="btn btn-sm"
+        onClick={() => setSteps([...steps, {
+          name: `step ${steps.length + 1}`,
+          method: 'GET',
+          url: steps[steps.length - 1]?.url ?? '',
+          headers: {},
+          body: '',
+          bodyType: 'none',
+          thinkTimeMs: 0,
+        }])}
+      >+ {t('config.addRequest')}</button>
+
+      <div className="section-title">{t('config.shared')}</div>
       <KeyValueEditor
         label={t('config.headers')} value={value.headers} onChange={(v) => set('headers', v)}
         suggestions={headerHints} valueSuggestions={headerValueHints}
@@ -238,17 +350,9 @@ function RestForm({ value, headerHints, headerValueHints, onChange }: {
         keyLabel={t('common.key')} valueLabel={t('common.value')}
       />
       <div className="field-row">
-        <SelectField label={t('config.bodyType')} value={value.bodyType}
-          options={(['none', 'json', 'raw', 'form'] as const).map((b) => ({ value: b, label: b }))}
-          onChange={(v) => set('bodyType', v)} />
         <NumberField label={t('config.timeout')} value={value.timeoutSec} min={1}
           onChange={(v) => set('timeoutSec', v)} />
-        <NumberField label={t('config.thinkTime')} value={value.thinkTimeMs} min={0}
-          onChange={(v) => set('thinkTimeMs', v)} />
       </div>
-      {value.bodyType !== 'none' ? (
-        <TextAreaField label={t('config.body')} value={value.body} onChange={(v) => set('body', v)} />
-      ) : null}
 
       <div className="section-title">{t('config.auth')}</div>
       <div className="field-row">
@@ -318,6 +422,7 @@ function RestForm({ value, headerHints, headerValueHints, onChange }: {
           })}
           <button className="btn btn-sm" style={{ alignSelf: 'flex-start' }}
             onClick={() => set('stages', [...value.stages, { duration: 30, target: 50 }])}>+ {t('common.add')}</button>
+          <RampBuilder onGenerate={(stages) => set('stages', stages)} />
         </div>
       ) : (
         <div className="field-row">
@@ -756,6 +861,8 @@ function KafkaForm({ value, hints, onChange }: {
           onChange={(v) => set('durationSec', v)} />
         <NumberField label={t('config.maxMessages')} value={value.maxMessages} min={0}
           onChange={(v) => set('maxMessages', v)} />
+        <NumberField label={t('config.maxMb')} hint={t('config.maxMbHint')} value={value.maxMb ?? 0} min={0}
+          onChange={(v) => set('maxMb', v)} />
       </div>
 
       <div className="section-title">{t('config.payload')}</div>
@@ -792,6 +899,13 @@ function KafkaForm({ value, hints, onChange }: {
           onChange={(v) => set('consumerGroup', v)} />
       </div>
       <CheckField label={t('config.monitorLag')} value={value.monitorLag} onChange={(v) => set('monitorLag', v)} />
+      {value.monitorLag ? (
+        <div className="field-row">
+          <NumberField label={t('config.drainTimeoutSec')} hint={t('config.drainTimeoutHint')}
+            value={value.drainTimeoutSec ?? 0} min={0} max={86_400}
+            onChange={(v) => set('drainTimeoutSec', v)} />
+        </div>
+      ) : null}
 
       <KeyValueEditor
         label={t('config.librdkafka')}
@@ -871,7 +985,26 @@ const THRESHOLD_UNITS: Record<string, string> = {
   min: 'ms', avg: 'ms', p90: 'ms', p95: 'ms', p99: 'ms', max: 'ms',
   rps: 'req/s', tps: 'tx/s', vus: '', success_rate: '%', error_rate: '%',
   total_requests: '', duration_s: 's',
+  lag_max: 'msg', lag_avg: 'msg', lag_end: 'msg', lag_final: 'msg',
+  lag_growth: 'msg/s', lag_drain_s: 's', total_mb: 'MB', mb_per_s: 'MB/s',
+  msg_lag_avg: 'ms', msg_lag_p50: 'ms', msg_lag_p95: 'ms', msg_lag_p99: 'ms', msg_lag_max: 'ms',
 };
+
+/** Metrics only a Kafka run can measure; any other protocol would fail them as unmeasured. */
+const KAFKA_ONLY_METRICS = new Set([
+  'lag_max', 'lag_avg', 'lag_end', 'lag_final', 'lag_growth', 'lag_drain_s', 'total_mb', 'mb_per_s',
+  'msg_lag_avg', 'msg_lag_p50', 'msg_lag_p95', 'msg_lag_p99', 'msg_lag_max',
+]);
+
+const KAFKA_THRESHOLD_EXAMPLES = [
+  'lag_max < 50000',
+  'lag_end < 1000',
+  'lag_growth <= 0',
+  'lag_drain_s < 60',
+  'msg_lag_p95 < 2000',
+  'total_mb >= 1000',
+  'mb_per_s > 10',
+];
 
 const THRESHOLD_EXAMPLES = [
   'p95 < 500',
@@ -896,7 +1029,11 @@ function ThresholdDoc({ protocol, metrics, onInsert }: {
   onInsert: (expr: string) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const rows = (metrics.length ? metrics : Object.keys(THRESHOLD_UNITS));
+  const rows = (metrics.length ? metrics : Object.keys(THRESHOLD_UNITS))
+    .filter((m) => protocol === 'kafka' || !KAFKA_ONLY_METRICS.has(m));
+  const examples = protocol === 'kafka'
+    ? [...THRESHOLD_EXAMPLES.filter((e) => !e.startsWith('rps')), ...KAFKA_THRESHOLD_EXAMPLES]
+    : THRESHOLD_EXAMPLES;
   return (
     <details className="doc-block">
       <summary>{t('config.thresholdDocTitle')}</summary>
@@ -937,7 +1074,7 @@ function ThresholdDoc({ protocol, metrics, onInsert }: {
 
       <div className="doc-line">{t('config.thresholdDocExamples')}</div>
       <div className="pills">
-        {THRESHOLD_EXAMPLES.map((e) => (
+        {examples.map((e) => (
           <button key={e} type="button" className="pill pill-btn"
             title={t('config.thresholdDocInsert')} onClick={() => onInsert(e)}>
             + <span className="mono">{e}</span>

@@ -23,9 +23,22 @@ const kv = z.record(z.string(), z.string()).transform((rec) => {
   return out;
 });
 
+const methodEnum = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']);
+const bodyTypeEnum = z.enum(['none', 'json', 'raw', 'form']);
+
+const restStepSchema = z.object({
+  name: trimmed.min(1).max(120),
+  method: methodEnum,
+  url: trimmed.url(),
+  headers: kv.default({}),
+  body: z.string().default(''),
+  bodyType: bodyTypeEnum.default('none'),
+  thinkTimeMs: z.number().int().min(0).max(60_000).default(0),
+});
+
 export const restSchema = z.object({
   url: trimmed.url(),
-  method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD']),
+  method: methodEnum,
   headers: kv,
   body: z.string(),
   bodyType: z.enum(['none', 'json', 'raw', 'form']),
@@ -47,7 +60,23 @@ export const restSchema = z.object({
   rate: z.number().int().min(1),
   rateDurationSec: z.number().int().min(1),
   preAllocatedVUs: z.number().int().min(1),
-});
+  // A profile saved before steps existed sends none; the transform below folds
+  // its single request into one, so nothing downstream has to know both shapes.
+  // Capped because every step costs a request per iteration, and a 50-step
+  // profile is a script, not a form.
+  steps: z.array(restStepSchema).max(20).default([]),
+}).transform((cfg) => ({
+  ...cfg,
+  steps: cfg.steps.length ? cfg.steps : [{
+    name: 'request',
+    method: cfg.method,
+    url: cfg.url,
+    headers: {},
+    body: cfg.body,
+    bodyType: cfg.bodyType,
+    thinkTimeMs: cfg.thinkTimeMs,
+  }],
+}));
 
 const socketFlowSchema = z.array(z.object({
   kind: z.enum(['send', 'think', 'expect', 'emit', 'listen']),
@@ -105,9 +134,11 @@ export const kafkaSchema = z.object({
   targetRate: z.number().int().min(1).max(1_000_000),
   durationSec: z.number().int().min(1).max(86_400),
   maxMessages: z.number().int().min(0),
+  maxMb: z.number().min(0).max(10_000_000).optional(),
   latencyMode: z.enum(['produce-ack', 'end-to-end']),
   consumerGroup: trimmed,
   monitorLag: z.boolean(),
+  drainTimeoutSec: z.number().int().min(0).max(86_400).optional(),
 });
 
 export const checkSchema = z.object({

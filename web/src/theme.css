@@ -359,6 +359,12 @@ pre.err-body { white-space: pre-wrap; word-break: break-word; max-height: 220px;
 .err-origin-label { color: var(--text-faint); margin-right: 6px; }
 .err-origin-tag { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
 
+/* Per-step threshold chips in the capacity table: one row's worth of verdicts,
+   wrapping rather than widening the table. */
+.chip-row { display: flex; flex-wrap: wrap; gap: 4px; max-width: 320px; }
+.chip-row .badge { gap: 4px; }
+.chip-goal { color: var(--text-faint); font-size: 10px; margin-left: 4px; }
+
 /* Response headers of the captured failure — name in a fixed column, value wraps. */
 .err-headers { max-height: 160px; overflow: auto; margin-bottom: 6px; }
 .err-header { display: flex; gap: 8px; font-size: 11px; line-height: 1.6; }
@@ -402,6 +408,22 @@ pre.err-body { white-space: pre-wrap; word-break: break-word; max-height: 220px;
   .lag-row { grid-template-columns: 1fr 44px 72px; }
   .lag-row .bar-track { display: none; }
 }
+
+/* Capacity ramp builder: a block of plan inputs that writes the stage list
+   above it. Its own container — .row-item is a two-column grid built for a
+   fields-plus-delete-button row, and folds this layout in half. */
+.ramp-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  margin-top: 4px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: var(--panel-alt);
+}
+.ramp-builder .field { margin-bottom: 0; }
+.ramp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 
 /* Repeating editor rows (checks, phases): fields grid + a delete button that
    keeps its own width instead of claiming a full auto-fit column. */

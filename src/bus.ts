@@ -17,7 +17,10 @@ class Bus extends EventEmitter {
     const id = ++this.seq;
     const key = ev.t === 'kafka-monitor' ? '__monitor' : ev.runId;
     if (key) {
-      const buf = this.buffers.get(key) ?? [];
+      let buf = this.buffers.get(key) ?? [];
+      // A lag snapshot supersedes the previous one; keeping every second of
+      // them would push the timeline out of the replay ring for nothing.
+      if (ev.t === 'lag') buf = buf.filter((e) => e.ev.t !== 'lag');
       buf.push({ id, ev });
       if (buf.length > RING) buf.splice(0, buf.length - RING);
       this.buffers.set(key, buf);

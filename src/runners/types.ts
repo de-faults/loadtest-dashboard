@@ -1,5 +1,11 @@
 import type { Aggregator, ErrorBody } from "../metrics/aggregator.ts";
-import type { CustomMetricResult, RunConfig } from "../shared/types.ts";
+import type {
+  CustomMetricResult,
+  GroupInfo,
+  KafkaRunSummary,
+  RunConfig,
+  ThresholdSpec,
+} from "../shared/types.ts";
 
 export interface RunnerContext {
   runId: string;
@@ -15,6 +21,8 @@ export interface RunnerContext {
    * as a failure on its own — `error()` does that.
    */
   errorBody(kind: string, body: ErrorBody): void;
+  /** Kafka: push the latest per-partition lag snapshot to the live view. */
+  lagSnapshot(groups: GroupInfo[]): void;
   /** Resolves when the user pressed Stop. */
   signal: AbortSignal;
 }
@@ -31,6 +39,18 @@ export interface RunnerResult {
   }>;
   /** Custom (non-built-in) metrics the runner's own summary reported. */
   nativeCustomMetrics?: CustomMetricResult[];
+  /**
+   * Thresholds declared by the script itself rather than the profile. Evaluated
+   * server-side exactly like the profile's own.
+   */
+  extraThresholds?: ThresholdSpec[];
+  /**
+   * The part of the run that generated load, when it ended before the run did
+   * (a post-load drain wait). Average throughput is taken over this instead.
+   */
+  loadDurationMs?: number;
+  /** Kafka only: volume and consumer-lag rollup. */
+  kafka?: KafkaRunSummary;
 }
 
 export interface Runner {

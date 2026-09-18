@@ -5,50 +5,25 @@
  *   p99 <= 1000        error_rate < 1         tps >= 5000
  *   avg < 200          max < 5000             total_requests > 10000
  *
+ * Kafka adds consumer lag and volume:
+ *
+ *   lag_max < 50000    lag_end < 1000         lag_drain_s < 60
+ *   lag_growth <= 0    total_mb >= 10000      mb_per_s > 50
+ *   msg_lag_p95 < 2000 msg_lag_max < 10000    (per-message lag, ms)
+ *
  * REST thresholds are additionally compiled into k6 `options.thresholds` so
  * k6's own exit code agrees with ours; if either side fails, the run fails.
  */
 
 import type { RunSummary, ThresholdResult, ThresholdSpec } from '../shared/types.ts';
+import { compare, parseThreshold, type MetricName, type Op } from '../shared/thresholdExpr.ts';
 
-export const METRICS = [
-  'min', 'avg', 'p90', 'p95', 'p99', 'max',
-  'rps', 'tps', 'vus',
-  'success_rate', 'error_rate',
-  'total_requests', 'duration_s',
-] as const;
-
-export type MetricName = (typeof METRICS)[number];
-
-const OPS = ['<=', '>=', '<', '>', '==', '!='] as const;
-type Op = (typeof OPS)[number];
-
-export interface ParsedThreshold {
-  metric: MetricName;
-  op: Op;
-  value: number;
-}
-
-const EXPR_RE = /^\s*([a-z_0-9]+)\s*(<=|>=|<|>|==|!=)\s*(-?[0-9]*\.?[0-9]+)\s*$/i;
-
-export function parseThreshold(expr: string): ParsedThreshold | null {
-  const m = EXPR_RE.exec(expr);
-  if (!m) return null;
-  const metric = m[1].toLowerCase() as MetricName;
-  if (!(METRICS as readonly string[]).includes(metric)) return null;
-  return { metric, op: m[2] as Op, value: Number(m[3]) };
-}
-
-function compare(actual: number, op: Op, expected: number): boolean {
-  switch (op) {
-    case '<': return actual < expected;
-    case '<=': return actual <= expected;
-    case '>': return actual > expected;
-    case '>=': return actual >= expected;
-    case '==': return actual === expected;
-    case '!=': return actual !== expected;
-  }
-}
+export {
+  METRICS,
+  OPS,
+  parseThreshold,
+} from '../shared/thresholdExpr.ts';
+export type { MetricName, Op, ParsedThreshold } from '../shared/thresholdExpr.ts';
 
 /** Pull the metric's actual value out of a finished run summary. */
 export function metricValue(metric: MetricName, s: RunSummary): number {
@@ -66,7 +41,36 @@ export function metricValue(metric: MetricName, s: RunSummary): number {
     case 'error_rate': return round2(100 - s.successRatePct);
     case 'total_requests': return s.totalRequests;
     case 'duration_s': return round2(s.durationMs / 1000);
+    case 'lag_max': return s.kafka?.lag?.max ?? NaN;
+    case 'lag_avg': return s.kafka?.lag?.avg ?? NaN;
+    case 'lag_end': return s.kafka?.lag?.endOfLoad ?? NaN;
+    case 'lag_final': return s.kafka?.lag?.final ?? NaN;
+    case 'lag_growth': return s.kafka?.lag?.growthPerSec ?? NaN;
+    // A group that never caught up has no drain time, and must fail any bound on it.
+    case 'lag_drain_s': {
+      const drain = s.kafka?.lag?.drain;
+      if (!drain) return NaN;
+      return drain.seconds ?? Number.POSITIVE_INFINITY;
+    }
+    case 'total_mb': return s.kafka ? round2(s.kafka.volume.bytesAcked / 1e6) : NaN;
+    case 'mb_per_s': return s.kafka?.volume.mbPerSecAvg ?? NaN;
+    case 'msg_lag_avg': return worstMessageLag(s, 'avg');
+    case 'msg_lag_p50': return worstMessageLag(s, 'p50');
+    case 'msg_lag_p95': return worstMessageLag(s, 'p95');
+    case 'msg_lag_p99': return worstMessageLag(s, 'p99');
+    case 'msg_lag_max': return worstMessageLag(s, 'max');
   }
+}
+
+/**
+ * Per-message lag across groups: the worst group decides. A group that left
+ * messages unconsumed has no upper bound on their lag, so it fails any limit.
+ */
+function worstMessageLag(s: RunSummary, key: 'avg' | 'p50' | 'p95' | 'p99' | 'max'): number {
+  const groups = s.kafka?.messageLag ?? [];
+  if (groups.length === 0) return NaN;
+  if (key === 'max' && groups.some((g) => g.pending > 0)) return Number.POSITIVE_INFINITY;
+  return Math.max(...groups.map((g) => g[key]));
 }
 
 export function evaluate(specs: ThresholdSpec[], summary: RunSummary): ThresholdResult[] {
@@ -76,7 +80,9 @@ export function evaluate(specs: ThresholdSpec[], summary: RunSummary): Threshold
       return { expr: spec.expr, metric: 'invalid', actual: NaN, passed: false };
     }
     const actual = metricValue(p.metric, summary);
-    return { expr: spec.expr, metric: p.metric, actual, passed: compare(actual, p.op, p.value) };
+    // Unmeasured (NaN) never passes — not even `!=`, which NaN would satisfy.
+    const passed = !Number.isNaN(actual) && compare(actual, p.op, p.value);
+    return { expr: spec.expr, metric: p.metric, actual, passed };
   });
 }
 

@@ -9,7 +9,8 @@ import { tailLines } from "./tail.ts";
 import { materializeScript, scriptEnv, usesCustomScript } from "./script.ts";
 import { classifyOrigin } from "./errorOrigin.ts";
 import type { Runner, RunnerContext, RunnerResult } from "./types.ts";
-import type { ErrorOrigin, RestConfig } from "../shared/types.ts";
+import { restSteps } from "../shared/defaults.ts";
+import type { ErrorOrigin, RestConfig, RestStep } from "../shared/types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "assets", "k6-script.js");
@@ -647,6 +648,18 @@ function buildScriptConfig(
   }
 
   return {
+    // Every step's effective headers are resolved here rather than in the
+    // script: auth and Content-Type are derived from config the script is
+    // deliberately not allowed to interpret.
+    steps: restSteps(cfg).map((step) => ({
+      name: step.name,
+      method: step.method,
+      url: step.url,
+      headers: stepHeaders(headers, step),
+      body: step.bodyType === "none" ? "" : step.body,
+      thinkTimeMs: step.thinkTimeMs,
+    })),
+    // Step 1, in the shape a build that predates steps understands.
     url: cfg.url,
     method: cfg.method,
     headers,
@@ -658,6 +671,23 @@ function buildScriptConfig(
     errorBody: ERROR_BODY,
     k6Options,
   };
+}
+
+/**
+ * A step's headers: the profile's shared set (auth already folded in) with the
+ * step's own merged over it, and a Content-Type only when the step sends a body
+ * and neither level named one.
+ */
+function stepHeaders(
+  shared: Record<string, string>,
+  step: RestStep,
+): Record<string, string> {
+  const out: Record<string, string> = { ...shared, ...step.headers };
+  const typed = Object.keys(out).some((k) => k.toLowerCase() === "content-type");
+  if (!typed && step.bodyType === "json") out["Content-Type"] = "application/json";
+  if (!typed && step.bodyType === "form")
+    out["Content-Type"] = "application/x-www-form-urlencoded";
+  return out;
 }
 
 export async function probe(

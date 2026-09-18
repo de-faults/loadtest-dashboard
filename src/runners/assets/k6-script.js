@@ -185,19 +185,54 @@ function reportErrorBody(res) {
   console.log(ERR_MARK + encoding.b64encode(payload));
 }
 
-export default function () {
-  const params = {
-    headers: CFG.headers || {},
+/**
+ * The requests one iteration issues, in order.
+ *
+ * The runner always sends `steps`; the single-request fields are the fallback
+ * for a config written by an older build, so the two never have to be kept in
+ * sync here.
+ */
+const STEPS = (CFG.steps && CFG.steps.length) ? CFG.steps : [{
+  name: 'request',
+  method: CFG.method,
+  url: CFG.url,
+  headers: CFG.headers,
+  body: CFG.body,
+  thinkTimeMs: CFG.thinkTimeMs,
+}];
+
+/**
+ * Several steps in one iteration means k6's own `scenario` tag — one value for
+ * the whole run — can no longer tell them apart, so each step overrides it with
+ * its own name. That tag is what the dashboard splits its per-scenario table
+ * on. A single-step profile is left alone: retagging it would rename the row of
+ * every run that came before.
+ */
+const TAGGED = STEPS.length > 1;
+
+const STEP_PARAMS = [];
+for (var si = 0; si < STEPS.length; si++) {
+  var step = STEPS[si];
+  var p = {
+    headers: step.headers || CFG.headers || {},
     timeout: (CFG.timeoutSec || 30) + 's',
     redirects: CFG.followRedirects ? 10 : 0,
   };
-  const body = CFG.body && CFG.body.length ? CFG.body : null;
-  const res = http.request(CFG.method || 'GET', CFG.url, body, params);
-  // k6's default expected response is 2xx/3xx; anything else — including a
-  // status of 0 from a transport error — is what the dashboard counts failed.
-  if (!(res.status >= 200 && res.status < 400)) reportErrorBody(res);
-  check(res, CHECKS);
-  if (CFG.thinkTimeMs > 0) sleep(CFG.thinkTimeMs / 1000);
+  if (TAGGED) p.tags = { scenario: step.name };
+  STEP_PARAMS.push(p);
+}
+
+export default function () {
+  for (var i = 0; i < STEPS.length; i++) {
+    const step = STEPS[i];
+    const body = step.body && step.body.length ? step.body : null;
+    const res = http.request(step.method || 'GET', step.url, body, STEP_PARAMS[i]);
+    // k6's default expected response is 2xx/3xx; anything else — including a
+    // status of 0 from a transport error — is what the dashboard counts failed.
+    if (!(res.status >= 200 && res.status < 400)) reportErrorBody(res);
+    check(res, CHECKS, TAGGED ? { scenario: step.name } : undefined);
+    if (step.thinkTimeMs > 0) sleep(step.thinkTimeMs / 1000);
+  }
 }
 
 export function handleSummary(data) {

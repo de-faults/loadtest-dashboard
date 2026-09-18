@@ -5,7 +5,7 @@
 
 import { Histogram } from './histogram.ts';
 import type {
-  CheckResult, ErrorBucket, ErrorOrigin, LatencyProfile, ScenarioStat, WindowMetrics,
+  CheckResult, ErrorBucket, ErrorOrigin, LatencyProfile, MessageLagWindow, ScenarioStat, WindowMetrics,
 } from '../shared/types.ts';
 
 /** Upper bound on distinct scenario names kept, so a stray tag cannot grow the map without limit. */
@@ -48,6 +48,7 @@ export class Aggregator {
   private wSuccess = 0;
   private wFailed = 0;
   private wLag: number | undefined;
+  private wMsgLag = new Histogram();
 
   totalRequests = 0;
   totalSuccess = 0;
@@ -155,6 +156,9 @@ export class Aggregator {
 
   setLag(lag: number): void { this.wLag = lag; }
 
+  /** Kafka: one message seen consumed, `lagMs` after it was produced. */
+  recordMessageLag(lagMs: number): void { this.wMsgLag.record(lagMs); }
+
   addCheck(name: string, passed: number, failed: number): void {
     const c = this.checks.get(name) ?? { passed: 0, failed: 0 };
     c.passed += passed;
@@ -227,6 +231,7 @@ export class Aggregator {
       vus: this.vus,
       latency: this.window.profile(),
       consumerLag: this.wLag,
+      ...(this.wMsgLag.count ? { messageLag: this.messageLagWindow() } : {}),
     };
 
     if (w.rps > this.rpsPeak) this.rpsPeak = w.rps;
@@ -240,8 +245,14 @@ export class Aggregator {
     this.wSuccess = 0;
     this.wFailed = 0;
     this.wLag = undefined;
+    this.wMsgLag = new Histogram();
     this.windowStart = now;
     return w;
+  }
+
+  private messageLagWindow(): MessageLagWindow {
+    const prof = this.wMsgLag.profile();
+    return { ...prof, p50: round2(Math.min(this.wMsgLag.percentile(50), prof.max)), count: this.wMsgLag.count };
   }
 
   get rpsAvg(): number {

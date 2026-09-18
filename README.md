@@ -162,13 +162,123 @@ p99 <= 1000      error_rate < 1         tps >= 5000
 avg < 200        max < 5000             total_requests > 10000
 ```
 
+Kafka adds consumer-lag and volume metrics:
+
+```
+lag_max < 50000      lag_end < 1000       lag_drain_s < 60
+lag_growth <= 0      total_mb >= 10000    mb_per_s > 50
+```
+
+A metric the run could not measure (no lag sampled, or `lag_drain_s` without a
+drain wait) fails its threshold rather than passing quietly.
+
 REST thresholds are additionally compiled into k6's own `options.thresholds`; if
 either side fails, the run fails. A run passes only when every threshold passes **and**
 every check meets its configured minimum pass rate.
 
+## Kafka consumer lag and volume test
+
+With **Chart consumer lag** on, the run samples the committed offsets of the
+consumer group (or of every group committing on the topic, when none is named)
+once a second, charts it next to TPS, and ends with a **Kafka volume & consumer
+lag** panel:
+
+| | |
+|---|---|
+| **start / max / avg / end of load** | backlog inherited, worst seen (and when), mean while load ran, at the moment production stopped |
+| **growth** | lag added per second of load; above 0 the consumers are falling behind for good |
+| **drain time** | seconds after production stopped until lag reached 0 |
+| **hottest partitions** | per-partition peak and final lag — one hot partition hides inside a total |
+| **volume** | messages and MB acked, MB/s average and peak second, what ended production |
+
+**Live view.** While the run samples, the lag panel shows current / min / max /
+mean / median of total lag and a per-partition table (end offset, committed,
+lag) refreshed every second.
+
+**Per-message lag.** Every acked message's partition and offset is remembered
+with its send time; when the group's committed offset is seen past it, that
+message's lag is recorded (ms). The run charts min / p50 / p95 / p99 / max per
+second and ends with a per-group table including *pending* — messages never
+consumed before the run ended. Only committed offsets are visible from outside
+a consumer, so resolution is the 1 s sample plus the group's commit interval
+(auto-commit defaults to 5 s). Needs `acks` 1 or all; up to 2 M unconsumed
+messages are tracked at once. Thresholds: `msg_lag_avg`, `msg_lag_p50`,
+`msg_lag_p95`, `msg_lag_p99`, `msg_lag_max` (worst group; any pending message
+fails `msg_lag_max`, so pair it with a drain wait).
+
+**Volume test.** Set *Volume limit (MB)* to push a fixed amount of data (key +
+value bytes) instead of running for a fixed time, and *Wait for consumers to
+catch up* to keep sampling after production until the group reaches lag 0. The
+drain wait is not billed to throughput: in produce-ack mode RPS/TPS are averaged
+over the load phase only.
+
+**Conditions in the script.** A custom generator can carry its own run
+conditions, so the profile form only needs the broker connection:
+
+```js
+export const options = {
+  targetRate: 5000, maxMb: 2000, drainTimeoutSec: 120,
+  consumerGroup: 'orders-service',
+  thresholds: ['lag_max < 200000', 'lag_drain_s < 60', 'total_mb >= 2000'],
+};
+```
+
+Recognised keys: `topic`, `targetRate`, `durationSec`, `maxMessages`, `maxMb`,
+`producers`, `consumerGroup`, `monitorLag`, `latencyMode`, `drainTimeoutSec`,
+`thresholds`. They override the form for that run; `thresholds` add to the
+profile's. Unknown keys and bad values are logged and ignored. See
+`src/runners/examples/kafka.example.mjs`. The YAML export carries `maxMb` and
+`drainTimeoutSec` as well.
+
+## Capacity (ramp) test
+
+A capacity test walks the load up in steps and holds each step long enough for the
+system to settle; the number worth taking away is not the run average but the last
+step the system still served inside its SLO. Two pieces support it:
+
+**Building the ramp.** REST → load model `stages` → *Capacity ramp builder*: start,
+step, max VUs plus ramp-up and hold seconds, and it writes the stage list (ramp,
+hold, ramp, hold, …, cool-down). The generated stages stay editable, so a
+non-uniform ramp is still a hand edit away.
+
+**Reading the result.** Every run gets a **Capacity** panel as soon as it has held
+two distinct load levels — live, while the ramp is still climbing. It reports, per
+held step: RPS, TPS, latency percentiles, worst single second, error rate, and every
+threshold of the profile evaluated against that step alone. From the curve it derives:
+
+| | |
+|---|---|
+| **capacity** | last step inside the SLO before the first failing one |
+| **saturation** | last step before extra VUs stopped buying throughput (gain ratio < 0.3) |
+| **breaking point** | first step that broke a threshold |
+| **recommended** | 80 % of whichever ceiling bound first — the level to drive the follow-up performance test at |
+
+The analysis reads the recorded 1-second windows, never the configuration, so a
+bring-your-own k6 script with its own `stages` (or an Artillery arrival-rate ramp,
+or a Kafka producer ramp) is analysed exactly the same way. Ramp transitions are
+excluded by a minimum hold length, and the settling head of each plateau is dropped
+before it is measured.
+
+Step percentiles are request-weighted means of the per-second percentiles — the raw
+distribution is not kept per step. Compare them step to step; quote the whole-run
+percentiles for an SLA.
+
+Thresholds double as the SLO, and are split by what they can say about one step. An
+upper bound on latency or errors (`p95 < 500`, `success_rate > 99`) must hold at
+every load level, so it decides whether the step held. A throughput or volume goal
+(`rps > 1000`, `tps >= 300`) describes the run as a whole — the first steps of a ramp
+are below it by design — so it is measured and shown per step, tagged *goal*, but
+never counted against one. Without any gating threshold only the throughput curve is
+read, and the panel says so.
+
+RPS and TPS are separate measurements: TPS counts completed transactions, and an
+async journey that submits then polls issues several requests per transaction. For a
+one-request iteration the two are the same number and the chart drops the duplicate
+line, while the table keeps both columns.
+
 ## CSV export
 
-`GET /api/runs/:id/export.csv?type=summary|timeseries|checks|thresholds|errors|all`
+`GET /api/runs/:id/export.csv?type=summary|timeseries|checks|thresholds|errors|capacity|kafka|all`
 
 - UTF-8 **BOM** is written — without it Excel renders Thai as mojibake.
 - Fields starting with `= + - @` are prefixed with `'`. Error text comes from the

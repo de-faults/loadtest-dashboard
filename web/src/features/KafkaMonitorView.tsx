@@ -4,10 +4,10 @@ import type { KafkaAuth, KafkaMonitorPayload, RunEvent } from '@shared/types.ts'
 import { api, type MonitorStatus } from '../lib/api.ts';
 import { CheckField, KeyValueEditor, SelectField, TextField } from '../components/Fields.tsx';
 import { useEventStream } from '../lib/sse.ts';
-import { compact, num } from '../lib/format.ts';
+import { compact } from '../lib/format.ts';
 import { Empty, Panel } from '../components/Panel.tsx';
 import { Modal } from '../components/Modal.tsx';
-import { Badge } from '../components/Stat.tsx';
+import { KafkaGroupCards } from '../components/KafkaGroups.tsx';
 import { SERIES_PALETTE, TimeSeries } from '../components/TimeSeries.tsx';
 
 const WINDOWS = [120, 900, 1800, 3600];
@@ -350,48 +350,7 @@ export function KafkaMonitorView(props: { onError: (m: string) => void }) {
             <Panel title={`${t('kafka.groups')} (${groups.length})`}>
               {groups.length === 0 ? (
                 <Empty text={groupFilter ? t('kafka.noGroupMatch') : t('kafka.noGroups')} />
-              ) : groups.map((g) => (
-                <div key={g.groupId} style={{
-                  border: '1px solid var(--border)', borderRadius: 4,
-                  padding: 10, marginBottom: 8, background: 'var(--bg-alt)',
-                }}>
-                  <div className="inline" style={{ flexWrap: 'wrap', marginBottom: 8 }}>
-                    <strong style={{ color: 'var(--accent)' }}>{g.groupId}</strong>
-                    <Badge tone={stateTone(g.state)}>{stateLabel(g.state)}</Badge>
-                    <span className="stat-sub">{g.memberCount} {t('kafka.members')}</span>
-                    <Badge tone={healthTone(g.totalLag)}>{t(`kafka.health.${healthKey(g.totalLag)}`)}</Badge>
-                    <span className="spacer" style={{ flex: 1 }} />
-                    <span className={`num ${lagClass(g.totalLag)}`} style={{ fontWeight: 600 }}>
-                      {t('kafka.lag')} = {num(g.totalLag)}
-                    </span>
-                  </div>
-                  {g.topics
-                    .filter((x) => !topicFilter || x.topic === topicFilter)
-                    .map((x) => {
-                      const share = g.totalLag > 0 ? Math.round((x.totalLag / g.totalLag) * 100) : 0;
-                      return (
-                        <div key={x.topic} style={{ marginBottom: 6 }}>
-                          <div className="lag-row">
-                            <span className="lag-name" title={x.topic}>{x.topic}</span>
-                            <div className="bar-track">
-                              <div className="bar-fill" style={{
-                                width: `${share}%`,
-                                background: x.totalLag === 0 ? 'var(--green)' : x.totalLag < 1000 ? 'var(--yellow)' : 'var(--red)',
-                              }} />
-                            </div>
-                            <span className="stat-sub lag-share">{share}%</span>
-                            <span className={`num lag-total ${lagClass(x.totalLag)}`}>{num(x.totalLag)}</span>
-                          </div>
-                          <div className="pills" style={{ marginTop: 4 }}>
-                            {x.partitions.map((p) => (
-                              <span key={p.partition} className="pill">p{p.partition}: {compact(p.lag)}</span>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              ))}
+              ) : <KafkaGroupCards groups={groups} topicFilter={topicFilter} />}
             </Panel>
           </div>
         </>
@@ -409,42 +368,4 @@ function isBlankAuth(auth: KafkaAuth): boolean {
 function padStart(values: number[], len: number): Array<number | null> {
   if (values.length >= len) return values.slice(-len);
   return [...Array<number | null>(len - values.length).fill(null), ...values];
-}
-
-/**
- * Kafka reports group state as a numeric enum over this client, so the badge
- * showed a bare "5" and the Stable/Dead comparisons never matched.
- */
-const GROUP_STATES: Record<string, string> = {
-  '0': 'Unknown', '1': 'PreparingRebalance', '2': 'CompletingRebalance',
-  '3': 'Stable', '4': 'Dead', '5': 'Empty',
-};
-
-function stateLabel(state: string | number): string {
-  return GROUP_STATES[String(state)] ?? String(state);
-}
-
-function stateTone(state: string | number): 'pass' | 'fail' | 'warn' | 'muted' {
-  switch (stateLabel(state)) {
-    case 'Stable': return 'pass';
-    case 'Dead': return 'fail';
-    case 'Empty': case 'Unknown': return 'muted';
-    default: return 'warn';
-  }
-}
-
-function lagClass(lag: number): string {
-  return lag === 0 ? 'v-green' : lag < 1000 ? 'v-yellow' : 'v-red';
-}
-
-function healthKey(lag: number): 'healthy' | 'caution' | 'warning' | 'critical' {
-  if (lag === 0) return 'healthy';
-  if (lag < 10_000) return 'caution';
-  if (lag < 100_000) return 'warning';
-  return 'critical';
-}
-
-function healthTone(lag: number): 'pass' | 'warn' | 'fail' {
-  const k = healthKey(lag);
-  return k === 'healthy' ? 'pass' : k === 'critical' ? 'fail' : 'warn';
 }

@@ -13,6 +13,30 @@
 //   key     string | null
 //   headers Record<string, string>   (the dashboard adds its own timing headers)
 
+// Optional: `options` puts the run's conditions in the script itself, so the
+// profile form only needs the broker connection. Every key is optional and
+// overrides the form for this run; an unknown key or bad value is logged and
+// ignored. `thresholds` are added to the profile's own.
+//
+// This one is a volume test: push 2 GB, then give the consumer group up to
+// 2 minutes to work through the backlog, and fail the run if it can't.
+export const options = {
+  targetRate: 5000,          // msg/s
+  durationSec: 1800,         // upper bound — maxMb normally ends it first
+  maxMb: 2000,               // stop after 2000 MB (key + value) acked; 0 = unlimited
+  producers: 2,
+  consumerGroup: 'orders-service', // the group under test; '' = every group on the topic
+  monitorLag: true,
+  drainTimeoutSec: 120,      // after producing, wait for lag 0 (measures drain time)
+  thresholds: [
+    'lag_max < 200000',      // backlog never exceeds 200k messages
+    'lag_growth <= 50',      // consumers keep (roughly) up while load runs
+    'lag_drain_s < 60',      // and clear the backlog within a minute afterwards
+    'total_mb >= 2000',      // the full volume actually landed
+    'success_rate > 99.9',
+  ],
+};
+
 let userIds = null;
 
 /** Called once before the run. Optional. */

@@ -7,7 +7,8 @@ import { MAX_CONCURRENT_RUNS } from "../config.ts";
 import { k6Runner } from "./k6.runner.ts";
 import { artilleryRunner } from "./artillery.runner.ts";
 import { kafkaRunner } from "./kafka.runner.ts";
-import type { Runner, RunnerContext } from "./types.ts";
+import { restSteps } from "../shared/defaults.ts";
+import type { Runner, RunnerContext, RunnerResult } from "./types.ts";
 import type {
   CustomMetricResult,
   Protocol,
@@ -192,6 +193,9 @@ function launch(
     errorBody(kind, body) {
       agg.attachErrorBody(kind, body);
     },
+    lagSnapshot(groups) {
+      bus.publish({ t: "lag", runId, ts: Date.now(), groups });
+    },
   };
 
   active.set(runId, {
@@ -222,9 +226,10 @@ async function execute(
   let nativeThresholds: ThresholdResult[] = [];
   let nativeCustomMetrics: CustomMetricResult[] = [];
   let nativeVerdict: "pass" | "fail" | undefined;
+  let result: RunnerResult = {};
 
   try {
-    const result = await runner.run(ctx);
+    result = await runner.run(ctx);
     nativeVerdict = result.nativeVerdict;
     nativeThresholds = result.nativeThresholds ?? [];
     nativeCustomMetrics = result.nativeCustomMetrics ?? [];
@@ -246,8 +251,12 @@ async function execute(
 
   if (ctx.signal.aborted && state !== "error") state = "stopped";
 
-  const summary = buildSummary(ctx, profileName, target, endedAt);
-  const own = evaluate(ctx.config.thresholds, summary);
+  const summary = buildSummary(ctx, profileName, target, endedAt, result.loadDurationMs);
+  if (result.kafka) summary.kafka = result.kafka;
+  const own = evaluate(
+    [...ctx.config.thresholds, ...(result.extraThresholds ?? [])],
+    summary,
+  );
   summary.thresholds = [...own, ...nativeThresholds];
   summary.customMetrics = nativeCustomMetrics;
 
@@ -285,12 +294,14 @@ function buildSummary(
   profileName: string,
   target: string,
   endedAt: number,
+  loadDurationMs?: number,
 ): RunSummary {
   const agg = ctx.agg;
   const durationMs = endedAt - agg.startedAt;
   // Derived from totals, not the mean of per-second windows: a partial trailing
-  // window would otherwise drag the average below the real throughput.
-  const seconds = durationMs / 1000;
+  // window would otherwise drag the average below the real throughput. A tail
+  // that generated no load (a drain wait) is left out for the same reason.
+  const seconds = (loadDurationMs ?? durationMs) / 1000;
   const throughput =
     seconds > 0 ? Math.round((agg.totalRequests / seconds) * 10) / 10 : 0;
   const transactionRate =
@@ -326,8 +337,13 @@ function buildSummary(
 
 export function targetOf(c: RunConfig): string {
   switch (c.protocol) {
-    case "rest":
-      return c.rest?.url ?? "";
+    case "rest": {
+      if (!c.rest) return "";
+      // A multi-step profile has no single target; naming the first and
+      // counting the rest beats silently showing only step 1.
+      const steps = restSteps(c.rest);
+      return steps.length > 1 ? `${steps[0].url} +${steps.length - 1}` : steps[0].url;
+    }
     case "socket":
       return c.socket?.url ?? "";
     case "kafka":
