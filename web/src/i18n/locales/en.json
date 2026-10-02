@@ -249,6 +249,8 @@
     "rate": "Arrival rate (/s)",
     "rateDuration": "Duration (s)",
     "preAllocatedVUs": "Pre-allocated VUs",
+    "maxVUs": "Max VUs",
+    "maxVUsHint": "Ceiling k6 may grow to. Needed VUs ≈ rate × avg iteration time (s); too low and k6 drops iterations, so the target rate is never reached.",
     "phases": "Phases",
     "arrivalRate": "Arrival rate",
     "rampTo": "Ramp to",

@@ -60,6 +60,9 @@ export const restSchema = z.object({
   rate: z.number().int().min(1),
   rateDurationSec: z.number().int().min(1),
   preAllocatedVUs: z.number().int().min(1),
+  // Optional so profiles saved before this field existed still validate; the
+  // transform below gives them the cap they always ran with.
+  maxVUs: z.number().int().min(1).max(100_000).optional(),
   // A profile saved before steps existed sends none; the transform below folds
   // its single request into one, so nothing downstream has to know both shapes.
   // Capped because every step costs a request per iteration, and a 50-step
@@ -67,6 +70,7 @@ export const restSchema = z.object({
   steps: z.array(restStepSchema).max(20).default([]),
 }).transform((cfg) => ({
   ...cfg,
+  maxVUs: cfg.maxVUs ?? Math.max(cfg.preAllocatedVUs * 4, cfg.rate),
   steps: cfg.steps.length ? cfg.steps : [{
     name: 'request',
     method: cfg.method,

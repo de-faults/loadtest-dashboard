@@ -413,6 +413,8 @@ export interface RestConfig {
   rate: number;
   rateDurationSec: number;
   preAllocatedVUs: number;
+  /** Ceiling k6 may grow the VU pool to. Needed ≈ rate × iteration seconds; too low drops iterations. */
+  maxVUs: number;
 }
 
 export interface SocketFlowStep {

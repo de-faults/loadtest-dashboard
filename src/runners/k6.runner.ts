@@ -425,7 +425,7 @@ function consumePoint(line: string, ctx: RunnerContext): void {
       if (value > 0) {
         ctx.error(
           "dropped_iterations",
-          `k6 dropped ${value} iteration(s): arrival rate exceeded available VUs — raise preAllocatedVUs/maxVUs`,
+          `k6 dropped ${value} iteration(s): arrival rate exceeded available VUs — raise Max VUs (needed ≈ rate × iteration seconds)`,
         );
       }
       break;
@@ -637,7 +637,8 @@ function buildScriptConfig(
         timeUnit: "1s",
         duration: `${cfg.rateDurationSec}s`,
         preAllocatedVUs: cfg.preAllocatedVUs,
-        maxVUs: Math.max(cfg.preAllocatedVUs * 4, cfg.rate),
+        // k6 rejects maxVUs below preAllocatedVUs.
+        maxVUs: Math.max(cfg.maxVUs, cfg.preAllocatedVUs),
       },
     };
   } else {

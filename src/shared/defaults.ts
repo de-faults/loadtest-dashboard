@@ -33,6 +33,7 @@ export const DEFAULT_REST: RestConfig = {
   rate: 100,
   rateDurationSec: 60,
   preAllocatedVUs: 50,
+  maxVUs: 1000,
 };
 
 export const DEFAULT_SOCKET: SocketConfig = {

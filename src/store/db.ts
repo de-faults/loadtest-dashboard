@@ -449,6 +449,7 @@ function pruneInactive(c: RunConfig): RunConfig {
       delete rest.rate;
       delete rest.rateDurationSec;
       delete rest.preAllocatedVUs;
+      delete rest.maxVUs;
     }
     const auth = rest.auth as { kind?: string } | undefined;
     if (auth?.kind === "none") delete rest.auth;

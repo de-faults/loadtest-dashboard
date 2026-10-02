@@ -431,6 +431,8 @@ function RestForm({ value, headerHints, headerValueHints, onChange }: {
             onChange={(v) => set('rateDurationSec', v)} />
           <NumberField label={t('config.preAllocatedVUs')} value={value.preAllocatedVUs} min={1}
             onChange={(v) => set('preAllocatedVUs', v)} />
+          <NumberField label={t('config.maxVUs')} value={value.maxVUs ?? Math.max(value.preAllocatedVUs * 4, value.rate)} min={1} max={100000}
+            hint={t('config.maxVUsHint')} onChange={(v) => set('maxVUs', v)} />
         </div>
       )}
 

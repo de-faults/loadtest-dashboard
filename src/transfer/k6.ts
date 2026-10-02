@@ -43,7 +43,7 @@ export function toK6Script(config: RunConfig): string {
         timeUnit: '1s',
         duration: `${cfg.rateDurationSec}s`,
         preAllocatedVUs: cfg.preAllocatedVUs,
-        maxVUs: Math.max(cfg.preAllocatedVUs * 4, cfg.rate),
+        maxVUs: Math.max(cfg.maxVUs, cfg.preAllocatedVUs),
       },
     };
   } else {
@@ -416,6 +416,7 @@ function applyOptions(
       rest.rate = asNumber(first.rate) ?? rest.rate;
       rest.rateDurationSec = toSeconds(first.duration) ?? rest.rateDurationSec;
       rest.preAllocatedVUs = asNumber(first.preAllocatedVUs) ?? rest.preAllocatedVUs;
+      rest.maxVUs = asNumber(first.maxVUs) ?? rest.maxVUs;
     } else if (first && executor === 'ramping-vus') {
       rest.loadModel = 'stages';
       const st = readStages(asArray(first.stages));
