@@ -405,7 +405,11 @@
     "compare": "Compare selected",
     "exportSelected": "Export selected",
     "exportAll": "Export all",
-    "selected": "{{count}} selected"
+    "selected": "{{count}} selected",
+    "deleteSelected": "Delete selected",
+    "deleteAll": "Delete all",
+    "selectAll": "Select all",
+    "confirmDeleteMany": "Delete {{count}} run(s) permanently?"
   },
   "kafka": {
     "title": "Kafka monitor",

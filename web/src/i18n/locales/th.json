@@ -405,7 +405,11 @@
     "compare": "เปรียบเทียบที่เลือก",
     "exportSelected": "ส่งออกที่เลือก",
     "exportAll": "ส่งออกทั้งหมด",
-    "selected": "เลือกแล้ว {{count}} รายการ"
+    "selected": "เลือกแล้ว {{count}} รายการ",
+    "deleteSelected": "ลบที่เลือก",
+    "deleteAll": "ลบทั้งหมด",
+    "selectAll": "เลือกทั้งหมด",
+    "confirmDeleteMany": "ต้องการลบ {{count}} รายการถาวรหรือไม่?"
   },
   "kafka": {
     "title": "มอนิเตอร์ Kafka",

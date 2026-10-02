@@ -26,6 +26,17 @@ export function HistoryView(props: { openRun: (id: string) => void; onError: (m:
     });
   };
 
+  const allSelected = runs.length > 0 && runs.every((r) => selected.has(r.id));
+  const someSelected = !allSelected && runs.some((r) => selected.has(r.id));
+  const toggleAll = (): void => setSelected(allSelected ? new Set() : new Set(runs.map((r) => r.id)));
+
+  // Deleted runs must not linger in the selection count or the compare charts.
+  const forget = (ids: string[]): void => {
+    const gone = new Set(ids);
+    setSelected((prev) => new Set([...prev].filter((id) => !gone.has(id))));
+    setCompare((prev) => prev.filter((c) => !gone.has(c.id)));
+  };
+
   async function buildCompare(): Promise<void> {
     const ids = [...selected];
     try {
@@ -42,7 +53,19 @@ export function HistoryView(props: { openRun: (id: string) => void; onError: (m:
 
   async function remove(id: string): Promise<void> {
     if (!confirm(t('common.confirmDelete'))) return;
-    try { await api.deleteRun(id); load(); } catch (e) { props.onError((e as Error).message); }
+    try { await api.deleteRun(id); forget([id]); load(); } catch (e) { props.onError((e as Error).message); }
+  }
+
+  async function removeMany(): Promise<void> {
+    // Never bulk-delete a run that is still in progress.
+    const ids = (selected.size ? runs.filter((r) => selected.has(r.id)) : runs)
+      .filter((r) => r.state !== 'running').map((r) => r.id);
+    if (!ids.length || !confirm(t('history.confirmDeleteMany', { count: ids.length }))) return;
+    const results = await Promise.allSettled(ids.map((id) => api.deleteRun(id)));
+    const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed) props.onError((failed.reason as Error).message);
+    forget(ids.filter((_, i) => results[i].status === 'fulfilled'));
+    load();
   }
 
   // Runs have independent time bases; align on elapsed seconds, pad with null.
@@ -78,6 +101,9 @@ export function HistoryView(props: { openRun: (id: string) => void; onError: (m:
                 href={csvUrl('/api/export/runs.csv', { ids: selected.size ? [...selected].join(',') : undefined })}
                 download
               >⇩ {selected.size ? t('history.exportSelected') : t('history.exportAll')}</a>
+              <button className="btn btn-sm" disabled={runs.length === 0} onClick={() => void removeMany()}>
+                ✕ {selected.size ? t('history.deleteSelected') : t('history.deleteAll')}
+              </button>
             </>
           }
           flush
@@ -87,7 +113,11 @@ export function HistoryView(props: { openRun: (id: string) => void; onError: (m:
               <table>
                 <thead>
                   <tr>
-                    <th style={{ width: 28 }} />
+                    <th style={{ width: 28 }}>
+                      <input className="checkbox" type="checkbox" aria-label={t('history.selectAll')}
+                        ref={(el) => { if (el) el.indeterminate = someSelected; }}
+                        checked={allSelected} onChange={toggleAll} />
+                    </th>
                     <th>{t('common.profile')}</th>
                     <th>{t('common.protocol')}</th>
                     <th>{t('history.started')}</th>
